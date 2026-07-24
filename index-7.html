@@ -1,0 +1,2603 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111d">
+  <title>Flash Loan Base — V8.4.4 RPC Circuit + Pending Revalidation</title>
+  <style>
+    :root { --bg:#07111d; --panel:#101d2e; --panel2:#0a1524; --text:#f5f8ff;
+      --muted:#aab7ca; --accent:#79a7ff; --ok:#42dda1; --bad:#ff7184;
+      --warn:#ffd275; --border:#30445e; --cyan:#61e4f4; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(#040a12,var(--bg)); color:var(--text);
+      font:16px/1.46 system-ui,-apple-system,sans-serif; }
+    main { max-width:1100px; margin:auto; padding:18px 13px 64px; }
+    h1 { font-size:clamp(28px,7vw,46px); line-height:1.04; margin:11px 0; }
+    h2 { font-size:22px; margin:0 0 10px; }
+    p { color:var(--muted); }
+    code { color:#dce8ff; word-break:break-all; }
+    .badge { display:inline-block; border:1px solid var(--border); border-radius:999px;
+      padding:7px 11px; color:var(--cyan); background:var(--panel2); font-weight:850; font-size:13px; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:21px;
+      padding:17px; margin:15px 0; }
+    .notice { border-left:4px solid var(--warn); padding:12px 14px; background:var(--panel2);
+      border-radius:12px; color:var(--muted); }
+    button { width:100%; border:0; border-radius:15px; padding:16px; margin:8px 0;
+      background:var(--accent); color:#06101d; font-size:17px; font-weight:900; }
+    button.alt { background:#1d304a; color:var(--text); border:1px solid var(--border); }
+    button.danger { background:#5b2631; color:#fff; border:1px solid var(--bad); }
+    button:disabled { opacity:.43; }
+    input { width:100%; border:1px solid var(--border); border-radius:14px; padding:14px;
+      background:var(--panel2); color:var(--text); font-size:18px; margin:6px 0 10px; }
+    label { display:block; color:var(--muted); font-weight:750; margin-top:8px; }
+    .inline-check { display:flex; gap:10px; align-items:flex-start; color:var(--muted); margin:10px 0; }
+    .inline-check input { width:auto; margin:4px 0 0; transform:scale(1.25); }
+    .target-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:8px 0 12px; }
+    .target-grid label { display:flex; gap:8px; align-items:center; background:var(--panel2); border:1px solid var(--border); border-radius:12px; padding:10px; margin:0; }
+    .target-grid input { width:auto; margin:0; }
+    .status { padding:14px; border:1px solid var(--border); background:var(--panel2);
+      border-radius:14px; font-weight:740; word-break:break-word; white-space:pre-wrap; }
+    .ok { color:var(--ok); border-color:var(--ok); }
+    .bad { color:var(--bad); border-color:var(--bad); }
+    .warn { color:var(--warn); border-color:var(--warn); }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }
+    .grid3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:10px; }
+    .metric { background:var(--panel2); border:1px solid var(--border); border-radius:14px; padding:12px; }
+    .metric small { display:block; color:var(--muted); }
+    .metric strong { word-break:break-word; }
+    table { width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; min-width:1180px; }
+    th,td { text-align:left; padding:9px 6px; border-bottom:1px solid var(--border); }
+    th { color:var(--muted); position:sticky; top:0; background:var(--panel); }
+    .positive { color:var(--ok); font-weight:900; }
+    .negative { color:var(--bad); font-weight:900; }
+    .hidden { display:none; }
+    details { margin-top:12px; }
+    summary { cursor:pointer; color:var(--accent); font-weight:800; }
+    .tiny { font-size:13px; color:var(--muted); }
+    .pulse { animation:pulse 1.6s infinite; }
+    @keyframes pulse { 50% { opacity:.55; } }
+    @media(max-width:760px) { .grid,.grid3,.target-grid { grid-template-columns:1fr; } table { font-size:12px; } }
+  </style>
+  <!-- ethers é carregado sob demanda pelo scanner para não bloquear a página. -->
+</head>
+<body>
+<main>
+  <span class="badge">Base • Morpho Blue • 4 DEXs • latest → pending • V8.4.4 RPC Circuit</span>
+  <h1>Flash Loan Base — RPC Circuit V8.4.4</h1>
+  <p>A V8.4.4 descobre pools e diferenças de preço no estado <code>latest</code>, elimina consultas duplicadas e reserva o minuto final exclusivamente para revalidar as melhores candidatas no estado pré-confirmado <code>pending</code> da Base.</p>
+  <div class="notice"><strong>Smart Priority não fabrica lucro.</strong> Cada leitura tem orçamento rígido de 4min30s. RPCs lentos entram temporariamente em circuito aberto, pools confirmados são reutilizados e rotas com perda de mercado muito grande não são ampliadas para valores maiores. Verde exige revalidação <code>pending</code>, líquido atual e pior caso acima do lucro mínimo, além da simulação atômica.</div>
+
+  <section class="card">
+    <h2>1. Configurar e monitorar</h2>
+    <label for="amounts">Valores do empréstimo em USDC</label>
+    <input id="amounts" value="10,50,250,2500,10000,50000" inputmode="decimal">
+    <label>Ativos-alvo</label>
+    <div class="target-grid">
+      <label><input type="checkbox" data-target="weth" checked>WETH</label>
+      <label><input type="checkbox" data-target="cbeth" checked>cbETH</label>
+      <label><input type="checkbox" data-target="wsteth" checked>wstETH</label>
+      <label><input type="checkbox" data-target="cbbtc" checked>cbBTC</label>
+      <label><input type="checkbox" data-target="aero" checked>AERO</label>
+      <label><input type="checkbox" data-target="usdbc" checked>USDbC</label>
+      <label><input type="checkbox" data-target="eurc" checked>EURC</label>
+    </div>
+    <label for="slippage">Reserva por rota (bps)</label>
+    <input id="slippage" value="1" inputmode="numeric">
+    <label for="minProfit">Lucro líquido mínimo protegido (USDC)</label>
+    <input id="minProfit" value="0.01" inputmode="decimal">
+    <label for="intervalSeconds">Intervalo automático (segundos)</label>
+    <input id="intervalSeconds" value="6" inputmode="numeric">
+    <label class="inline-check"><input id="adaptiveRefine" type="checkbox" checked><span>Refinar automaticamente valores perto dos melhores resultados.</span></label>
+    <label class="inline-check"><input id="divineMode" type="checkbox" checked><span><strong>Smart Priority:</strong> depois da rota histórica automática, testa diferenças de fee tier e as rotas mais promissoras, força diversidade entre DEXs e refina as quatro melhores rotas.</span></label>
+
+    <button id="scanBtn">Escanear agora</button>
+    <button id="startMonitorBtn" class="alt">Iniciar monitor automático</button>
+    <button id="stopMonitorBtn" class="danger" disabled>Parar monitor</button>
+    <button id="exportBtn" class="alt" disabled>Baixar diagnóstico da última leitura</button>
+    <div id="scanStatus" class="status">Pronto. A carteira permanece desconectada.</div>
+
+    <div class="grid3">
+      <div class="metric"><small>Preço de referência ETH</small><strong id="oraclePrice">—</strong></div>
+      <div class="metric"><small>Gás atual</small><strong id="gasPrice">—</strong></div>
+      <div class="metric"><small>Última leitura</small><strong id="lastScan">—</strong></div>
+      <div class="metric"><small>Cotação Aerodrome</small><strong id="aeroLiquidity">—</strong></div>
+      <div class="metric"><small>Cotações Uniswap</small><strong id="uniLiquidity">—</strong></div>
+      <div class="metric"><small>Cotações Slipstream</small><strong id="slipLiquidity">—</strong></div>
+      <div class="metric"><small>Cotações Pancake V3</small><strong id="pancakeLiquidity">—</strong></div>
+      <div class="metric"><small>Flashblocks</small><strong id="flashblocksState">—</strong></div>
+      <div class="metric"><small>RPC ativo</small><strong id="rpcState">—</strong></div>
+      <div class="metric"><small>Rotas completas nesta leitura</small><strong id="completeQuoteCount">0</strong></div>
+      <div class="metric"><small>Diagnóstico de cotações</small><strong id="quoteDiagnosticsSummary">aguardando</strong></div>
+      <div class="metric"><small>Próxima leitura</small><strong id="nextScan">—</strong></div>
+      <div class="metric"><small>Etapa</small><strong id="scanPhase">—</strong></div>
+      <div class="metric"><small>Tempo restante desta consulta</small><strong id="scanBudgetState">4:30 máximo</strong></div>
+      <div class="metric"><small>Tela ativa</small><strong id="wakeState">desligada</strong></div>
+      <div class="metric"><small>Execução L2</small><strong id="l2Fee">—</strong></div>
+      <div class="metric"><small>Publicação L1</small><strong id="l1Fee">—</strong></div>
+      <div class="metric"><small>Taxa do operador</small><strong id="operatorFee">—</strong></div>
+      <div class="metric"><small>Premium flash loan</small><strong id="flashPremium">—</strong></div>
+      <div class="metric"><small>Spread bruto</small><strong id="grossSpread">—</strong></div>
+      <div class="metric"><small>Reserva de segurança</small><strong id="safetyReserve">—</strong></div>
+      <div class="metric"><small>Líquido pela cotação atual</small><strong id="marketNet">—</strong></div>
+    </div>
+
+    <div class="grid">
+      <div class="metric"><small>Melhor rota</small><strong id="bestRoute">—</strong></div>
+      <div class="metric"><small>Melhor líquido atual</small><strong id="bestNet">—</strong></div>
+      <div class="metric"><small>Bloco</small><strong id="bestBlock">—</strong></div>
+      <div class="metric"><small>Confirmações</small><strong id="confirmations">0/1</strong></div>
+    </div>
+
+    <div class="hidden"><strong id="baseBest">—</strong><span id="baseState"></span></div>
+
+    <div style="overflow:auto"><table id="resultTable" class="hidden">
+      <thead><tr><th>Valor</th><th>Ativo</th><th>Rota</th><th>Parâmetros</th><th>Spread bruto</th><th>Rede</th><th>Reserva</th><th>Líquido atual</th><th>Pior caso</th></tr></thead>
+      <tbody id="resultBody"></tbody>
+    </table></div>
+    <p class="tiny">A descoberta ampla usa <code>latest</code>. Somente linhas revalidadas no <code>pending</code> podem liberar a carteira. A V8.4.4 reutiliza apenas histórico anteriormente positivo e protegido, consulta uma mesma cotação uma única vez por janela, preserva um minuto para a revalidação final e exige pior caso protegido acima do mínimo configurado.</p>
+  </section>
+
+  <section class="card">
+    <h2>2. Carteira e executor</h2>
+    <div id="baseGate" class="status">Você pode preparar a carteira antes de surgir uma rota positiva.</div>
+    <label class="inline-check"><input id="riskAck" type="checkbox"><span>Entendo que a Base principal usa ETH real para gás e que uma transação revertida ainda pode consumir gás.</span></label>
+    <button id="connectBtn" disabled>Conectar carteira na Base</button>
+    <div class="grid">
+      <div class="metric"><small>Conta</small><strong id="account">—</strong></div>
+      <div class="metric"><small>Rede</small><strong id="network">—</strong></div>
+      <div class="metric"><small>Saldo de ETH</small><strong id="ethBalance">—</strong></div>
+      <div class="metric"><small>Financiamento</small><strong id="premiumBps">—</strong></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>3. Preparar ou carregar executor</h2>
+    <button id="compileBtn" disabled>Preparar contrato V8</button>
+    <div id="compileStatus" class="status">Conecte a carteira para preparar o contrato.</div>
+    <button id="deployBtn" class="alt" disabled>Implantar executor na Base</button>
+    <label for="executorInput">Executor já implantado</label>
+    <input id="executorInput" placeholder="0x..." autocomplete="off" spellcheck="false">
+    <button id="loadExecutorBtn" class="alt" disabled>Carregar e verificar executor</button>
+    <div id="deployStatus" class="status">Nenhum executor carregado.</div>
+  </section>
+
+  <section class="card">
+    <h2>4. Simular e executar</h2>
+    <button id="exactBtn" class="alt" disabled>Simular flash loan completo</button>
+    <div id="exactStatus" class="status">Aguardando executor verificado e rota positiva.</div>
+    <button id="executeBtn" disabled>Executar flash loan</button>
+    <div id="executeStatus" class="status">Nenhuma transação enviada.</div>
+  </section>
+
+  <section class="card">
+    <h2>5. Segurança e retirada</h2>
+    <button id="pauseBtn" class="danger" disabled>Pausar executor</button>
+    <button id="unpauseBtn" class="alt" disabled>Reativar executor</button>
+    <button id="withdrawBtn" class="danger" disabled>Sacar USDC do executor</button>
+    <p class="tiny">A pausa bloqueia novas arbitragens, mas mantém o saque pelo proprietário.</p>
+  </section>
+
+  <section class="card">
+    <details open><summary>O que mudou na V8.4.4</summary>
+      <p><strong>RPC Circuit + Quote Dedup + Final Pending:</strong> a descoberta usa <code>latest</code>; o minuto final fica reservado para revalidar as melhores rotas no <code>pending</code>. Cotações iguais compartilham a mesma promessa e têm cache curto. A existência de pools usa cache com validade, sem transformar timeout em “pool inexistente”. Endpoints com falhas repetidas entram em circuito aberto por 30 segundos e o pedido migra para outro RPC. Rotas com perda de mercado muito grande são registradas, mas não ampliadas. Histórico negativo deixa de receber prioridade. Verde exige <code>protectedWorstCaseUSDC</code> acima do mínimo.</p>
+    </details>
+  </section>
+
+<script id="soliditySource" type="text/plain">// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+interface IERC20Minimal {
+    function balanceOf(address account) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+
+interface IMorphoMinimal {
+    function flashLoan(address token, uint256 assets, bytes calldata data) external;
+}
+
+interface IUniswapV3SwapRouter02 {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external payable returns (uint256 amountOut);
+}
+
+interface IPancakeV3SwapRouter {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external payable returns (uint256 amountOut);
+}
+
+interface IAerodromeRouter {
+    struct Route { address from; address to; bool stable; address factory; }
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        Route[] calldata routes,
+        address to,
+        uint256 deadline
+    ) external returns (uint256[] memory amounts);
+}
+
+interface ISlipstreamSwapRouter {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        int24 tickSpacing;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external payable returns (uint256 amountOut);
+}
+
+/**
+ * @title FlashLoanArbitrageBaseV80
+ * @notice Executor USDC para arbitragem atômica na Base usando Morpho Blue e
+ *         Uniswap V3, Aerodrome clássico, Aerodrome Slipstream e PancakeSwap V3.
+ * @dev O contrato nunca mantém dívida: toda operação reverte se não devolver o
+ *      principal e o lucro mínimo protegido. A taxa de rede é paga em ETH pelo
+ *      proprietário e deve ser incorporada ao campo minProfit pelo painel.
+ */
+contract FlashLoanArbitrageBaseV80 {
+    uint256 public constant BASE_CHAIN_ID = 8453;
+    uint256 public constant MAX_LOAN_AMOUNT = 50_000e6;
+    uint256 public constant MIN_PROFIT_FLOOR = 10_000; // 0,01 USDC, perfil agressivo
+
+    uint8 public constant VENUE_UNISWAP = 0;
+    uint8 public constant VENUE_AERODROME = 1;
+    uint8 public constant VENUE_SLIPSTREAM = 2;
+    uint8 public constant VENUE_PANCAKE = 3;
+
+    address public constant MORPHO = 0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb;
+    address public constant USDC = 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913;
+    address public constant WETH = 0x4200000000000000000000000000000000000006;
+    address public constant CBETH = 0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22;
+    address public constant WSTETH = 0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452;
+    address public constant AERO = 0x940181a94a35a4569e4529a3cdfb74e38fd98631;
+    address public constant USDBC = 0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca;
+    address public constant EURC = 0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42;
+    address public constant CBBTC = 0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf;
+
+    address public constant UNISWAP_ROUTER = 0x2626664c2603336e57b271c5c0b26f421741e481;
+    address public constant AERODROME_ROUTER = 0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43;
+    address public constant AERODROME_FACTORY = 0x420dd381b31aef6683db6b902084cb0ffece40da;
+    address public constant SLIPSTREAM_ROUTER = 0xbe6d8f0d05cc4be24d5167a3ef062215be6d18a5;
+    address public constant PANCAKE_ROUTER = 0x1b81d678ffb9c0263b24a97847620c99d213eb14;
+
+    address public owner;
+    address public pendingOwner;
+    bool public paused;
+
+    bool private loanActive;
+    bytes32 private activeRouteHash;
+    uint256 private preLoanBalance;
+
+    struct RoutePlan {
+        uint256 amount;
+        address target;
+        uint8 buyVenue;
+        uint8 sellVenue;
+        uint24 buyV3Fee;
+        uint24 sellV3Fee;
+        int24 buySlipstreamTickSpacing;
+        int24 sellSlipstreamTickSpacing;
+        bool buyAerodromeStable;
+        bool sellAerodromeStable;
+        uint256 minTargetOut;
+        uint256 minUsdcOut;
+        uint256 minProfit;
+        uint256 deadline;
+    }
+
+    event ExecutorDeployed(address indexed executor, address indexed owner);
+    event OwnershipTransferStarted(address indexed owner, address indexed pendingOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event PausedSet(bool paused);
+    event ArbitrageStarted(
+        bytes32 indexed routeHash,
+        address indexed target,
+        uint256 amount,
+        uint8 buyVenue,
+        uint8 sellVenue,
+        uint24 buyV3Fee,
+        uint24 sellV3Fee,
+        int24 buySlipstreamTickSpacing,
+        int24 sellSlipstreamTickSpacing,
+        bool buyAerodromeStable,
+        bool sellAerodromeStable
+    );
+    event ArbitrageSettled(
+        bytes32 indexed routeHash,
+        address indexed target,
+        uint256 amountBorrowed,
+        uint256 premium,
+        uint256 targetReceived,
+        uint256 usdcReturned,
+        uint256 realizedProfit
+    );
+    event TokenWithdrawn(address indexed token, address indexed recipient, uint256 amount);
+
+    error NotOwner();
+    error NotPendingOwner();
+    error ZeroAddress();
+    error ExecutorPaused();
+    error WrongChain();
+    error InvalidRoute();
+    error InvalidAmount();
+    error InvalidFee();
+    error InvalidTickSpacing();
+    error InvalidTarget();
+    error InvalidStableMode();
+    error DeadlineExpired();
+    error LoanAlreadyActive();
+    error NoActiveLoan();
+    error NotMorpho();
+    error RouteHashMismatch();
+    error Unprofitable(uint256 available, uint256 required);
+    error TokenCallFailed(address token);
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    modifier whenNotPaused() {
+        if (paused) revert ExecutorPaused();
+        _;
+    }
+
+    constructor() {
+        if (block.chainid != BASE_CHAIN_ID) revert WrongChain();
+        owner = msg.sender;
+        emit ExecutorDeployed(address(this), msg.sender);
+        emit OwnershipTransferred(address(0), msg.sender);
+    }
+
+    function isSupportedTarget(address target) public pure returns (bool) {
+        return target == WETH || target == CBETH || target == WSTETH ||
+            target == AERO || target == USDBC || target == EURC || target == CBBTC;
+    }
+
+    function startArbitrage(RoutePlan calldata plan)
+        external
+        onlyOwner
+        whenNotPaused
+        returns (uint256 realizedProfit)
+    {
+        if (block.chainid != BASE_CHAIN_ID) revert WrongChain();
+        if (loanActive) revert LoanAlreadyActive();
+        _validatePlan(plan);
+
+        uint256 beforeBalance = IERC20Minimal(USDC).balanceOf(address(this));
+        bytes32 routeHash = keccak256(abi.encode(plan));
+        loanActive = true;
+        activeRouteHash = routeHash;
+        preLoanBalance = beforeBalance;
+
+        emit ArbitrageStarted(
+            routeHash,
+            plan.target,
+            plan.amount,
+            plan.buyVenue,
+            plan.sellVenue,
+            plan.buyV3Fee,
+            plan.sellV3Fee,
+            plan.buySlipstreamTickSpacing,
+            plan.sellSlipstreamTickSpacing,
+            plan.buyAerodromeStable,
+            plan.sellAerodromeStable
+        );
+
+        IMorphoMinimal(MORPHO).flashLoan(USDC, plan.amount, abi.encode(plan));
+        if (loanActive) revert NoActiveLoan();
+
+        uint256 afterBalance = IERC20Minimal(USDC).balanceOf(address(this));
+        realizedProfit = afterBalance - beforeBalance;
+        activeRouteHash = bytes32(0);
+        preLoanBalance = 0;
+    }
+
+    function onMorphoFlashLoan(uint256 assets, bytes calldata data) external {
+        if (msg.sender != MORPHO) revert NotMorpho();
+        if (!loanActive) revert NoActiveLoan();
+
+        RoutePlan memory plan = abi.decode(data, (RoutePlan));
+        if (keccak256(abi.encode(plan)) != activeRouteHash) revert RouteHashMismatch();
+        if (assets != plan.amount) revert InvalidAmount();
+        if (block.timestamp > plan.deadline) revert DeadlineExpired();
+
+        uint256 targetReceived = _swapVenue(
+            true, USDC, plan.target, assets, plan.minTargetOut, plan
+        );
+        uint256 usdcReturned = _swapVenue(
+            false, plan.target, USDC, targetReceived, plan.minUsdcOut, plan
+        );
+
+        uint256 effectiveMinProfit = plan.minProfit < MIN_PROFIT_FLOOR
+            ? MIN_PROFIT_FLOOR
+            : plan.minProfit;
+        uint256 required = preLoanBalance + assets + effectiveMinProfit;
+        uint256 available = IERC20Minimal(USDC).balanceOf(address(this));
+        if (available < required) revert Unprofitable(available, required);
+
+        uint256 profit = available - preLoanBalance - assets;
+        _forceApprove(USDC, MORPHO, assets);
+        loanActive = false;
+
+        emit ArbitrageSettled(
+            activeRouteHash,
+            plan.target,
+            assets,
+            0,
+            targetReceived,
+            usdcReturned,
+            profit
+        );
+    }
+
+    function setPaused(bool newPaused) external onlyOwner {
+        if (loanActive) revert LoanAlreadyActive();
+        paused = newPaused;
+        emit PausedSet(newPaused);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        address previousOwner = owner;
+        owner = msg.sender;
+        pendingOwner = address(0);
+        emit OwnershipTransferred(previousOwner, msg.sender);
+    }
+
+    function withdrawToken(address token) external onlyOwner {
+        if (loanActive) revert LoanAlreadyActive();
+        uint256 balance = IERC20Minimal(token).balanceOf(address(this));
+        if (balance == 0) return;
+        _safeTransfer(token, owner, balance);
+        emit TokenWithdrawn(token, owner, balance);
+    }
+
+    function _validatePlan(RoutePlan calldata plan) internal view {
+        if (plan.amount == 0 || plan.amount > MAX_LOAN_AMOUNT) revert InvalidAmount();
+        if (!isSupportedTarget(plan.target)) revert InvalidTarget();
+
+        _validateLeg(
+            plan.buyVenue,
+            plan.target,
+            plan.buyV3Fee,
+            plan.buySlipstreamTickSpacing,
+            plan.buyAerodromeStable
+        );
+        _validateLeg(
+            plan.sellVenue,
+            plan.target,
+            plan.sellV3Fee,
+            plan.sellSlipstreamTickSpacing,
+            plan.sellAerodromeStable
+        );
+
+        if (plan.buyVenue == plan.sellVenue) {
+            if (
+                plan.buyV3Fee == plan.sellV3Fee &&
+                plan.buySlipstreamTickSpacing == plan.sellSlipstreamTickSpacing &&
+                plan.buyAerodromeStable == plan.sellAerodromeStable
+            ) revert InvalidRoute();
+        }
+
+        if (plan.minTargetOut == 0 || plan.minUsdcOut == 0) revert InvalidRoute();
+        if (plan.deadline <= block.timestamp || plan.deadline > block.timestamp + 2 minutes) {
+            revert DeadlineExpired();
+        }
+    }
+
+    function _validateLeg(
+        uint8 venue,
+        address target,
+        uint24 v3Fee,
+        int24 slipstreamTickSpacing,
+        bool aerodromeStable
+    ) internal pure {
+        if (venue == VENUE_UNISWAP) {
+            if (!_supportedUniswapFee(v3Fee)) revert InvalidFee();
+            if (slipstreamTickSpacing != 0 || aerodromeStable) revert InvalidRoute();
+            return;
+        }
+        if (venue == VENUE_PANCAKE) {
+            if (!_supportedPancakeFee(v3Fee)) revert InvalidFee();
+            if (slipstreamTickSpacing != 0 || aerodromeStable) revert InvalidRoute();
+            return;
+        }
+        if (venue == VENUE_AERODROME) {
+            if (v3Fee != 0 || slipstreamTickSpacing != 0) revert InvalidRoute();
+            if (aerodromeStable && target != USDBC && target != EURC) {
+                revert InvalidStableMode();
+            }
+            return;
+        }
+        if (venue == VENUE_SLIPSTREAM) {
+            if (v3Fee != 0 || slipstreamTickSpacing <= 0 || aerodromeStable) {
+                revert InvalidTickSpacing();
+            }
+            return;
+        }
+        revert InvalidRoute();
+    }
+
+    function _supportedUniswapFee(uint24 fee) internal pure returns (bool) {
+        return fee == 100 || fee == 500 || fee == 3000 || fee == 10000;
+    }
+
+    function _supportedPancakeFee(uint24 fee) internal pure returns (bool) {
+        return fee == 100 || fee == 500 || fee == 2500 || fee == 3000 || fee == 10000;
+    }
+
+    function _swapVenue(
+        bool buySide,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        RoutePlan memory plan
+    ) internal returns (uint256 amountOut) {
+        uint8 venue = buySide ? plan.buyVenue : plan.sellVenue;
+        uint24 v3Fee = buySide ? plan.buyV3Fee : plan.sellV3Fee;
+        int24 slipstreamTickSpacing = buySide
+            ? plan.buySlipstreamTickSpacing
+            : plan.sellSlipstreamTickSpacing;
+        bool aerodromeStable = buySide
+            ? plan.buyAerodromeStable
+            : plan.sellAerodromeStable;
+
+        if (venue == VENUE_UNISWAP) {
+            return _swapUniswap(tokenIn, tokenOut, amountIn, amountOutMin, v3Fee);
+        }
+        if (venue == VENUE_AERODROME) {
+            return _swapAerodrome(
+                tokenIn, tokenOut, amountIn, amountOutMin, plan.deadline, aerodromeStable
+            );
+        }
+        if (venue == VENUE_SLIPSTREAM) {
+            return _swapSlipstream(
+                tokenIn, tokenOut, amountIn, amountOutMin, plan.deadline, slipstreamTickSpacing
+            );
+        }
+        if (venue == VENUE_PANCAKE) {
+            return _swapPancake(
+                tokenIn, tokenOut, amountIn, amountOutMin, plan.deadline, v3Fee
+            );
+        }
+        revert InvalidRoute();
+    }
+
+    function _swapUniswap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        uint24 fee
+    ) internal returns (uint256 amountOut) {
+        _forceApprove(tokenIn, UNISWAP_ROUTER, amountIn);
+        amountOut = IUniswapV3SwapRouter02(UNISWAP_ROUTER).exactInputSingle(
+            IUniswapV3SwapRouter02.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: fee,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMin,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    function _swapPancake(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        uint256 deadline,
+        uint24 fee
+    ) internal returns (uint256 amountOut) {
+        _forceApprove(tokenIn, PANCAKE_ROUTER, amountIn);
+        amountOut = IPancakeV3SwapRouter(PANCAKE_ROUTER).exactInputSingle(
+            IPancakeV3SwapRouter.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: fee,
+                recipient: address(this),
+                deadline: deadline,
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMin,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    function _swapAerodrome(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        uint256 deadline,
+        bool stable
+    ) internal returns (uint256 amountOut) {
+        _forceApprove(tokenIn, AERODROME_ROUTER, amountIn);
+        IAerodromeRouter.Route[] memory routes = new IAerodromeRouter.Route[](1);
+        routes[0] = IAerodromeRouter.Route({
+            from: tokenIn,
+            to: tokenOut,
+            stable: stable,
+            factory: AERODROME_FACTORY
+        });
+        uint256[] memory amounts = IAerodromeRouter(AERODROME_ROUTER).swapExactTokensForTokens(
+            amountIn,
+            amountOutMin,
+            routes,
+            address(this),
+            deadline
+        );
+        amountOut = amounts[amounts.length - 1];
+    }
+
+    function _swapSlipstream(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        uint256 deadline,
+        int24 tickSpacing
+    ) internal returns (uint256 amountOut) {
+        _forceApprove(tokenIn, SLIPSTREAM_ROUTER, amountIn);
+        amountOut = ISlipstreamSwapRouter(SLIPSTREAM_ROUTER).exactInputSingle(
+            ISlipstreamSwapRouter.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                tickSpacing: tickSpacing,
+                recipient: address(this),
+                deadline: deadline,
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMin,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    function _forceApprove(address token, address spender, uint256 amount) internal {
+        (bool ok, bytes memory data) = token.call(
+            abi.encodeCall(IERC20Minimal.approve, (spender, amount))
+        );
+        if (ok && (data.length == 0 || abi.decode(data, (bool)))) return;
+
+        (ok, data) = token.call(abi.encodeCall(IERC20Minimal.approve, (spender, 0)));
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {
+            revert TokenCallFailed(token);
+        }
+
+        (ok, data) = token.call(
+            abi.encodeCall(IERC20Minimal.approve, (spender, amount))
+        );
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {
+            revert TokenCallFailed(token);
+        }
+    }
+
+    function _safeTransfer(address token, address to, uint256 amount) internal {
+        (bool ok, bytes memory data) = token.call(
+            abi.encodeCall(IERC20Minimal.transfer, (to, amount))
+        );
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {
+            revert TokenCallFailed(token);
+        }
+    }
+}</script>
+<script>
+(() => {
+  "use strict";
+
+  const STORAGE_KEY = "flashloan-base-v8-4-4-rpc-circuit";
+  const LEGACY_STORAGE_KEYS = ["flashloan-base-v8-4-history-timeout","flashloan-base-v8-3-smartscan"];
+  const UNI_FEE_TIERS = [100, 500, 3000, 10000];
+  const PANCAKE_FEE_TIERS = [100, 500, 2500, 3000, 10000];
+  const DISCOVERY_BLOCK_TAG = "latest";
+  const REVALIDATION_BLOCK_TAG = "pending";
+  const FLASHBLOCK_TAG = REVALIDATION_BLOCK_TAG;
+  const SLIP_TICK_SPACINGS = [1, 50, 100, 200, 2000];
+  const VENUE = Object.freeze({UNI:0, AERO:1, SLIP:2, PANCAKE:3});
+  const VENUE_NAMES = Object.freeze({0:"Uniswap V3",1:"Aerodrome clássico",2:"Aerodrome Slipstream",3:"PancakeSwap V3"});
+  const SCAN_TX_SIZE = 760n;
+  const FLASH_BASE_GAS = 270000n;
+  const FALLBACK_SWAP_GAS = Object.freeze({0:150000n,1:185000n,2:165000n,3:155000n});
+  const REFINE_BPS = [8000n,9000n,9500n,9750n,10250n,10500n,11000n,12500n];
+  const MIN_SCAN_AMOUNT = 10_000_000n;
+  const MAX_SCAN_AMOUNT = 50_000_000_000n;
+  const DISCOVERY_TEMPLATES = 7;
+  const FAST_DISCOVERY_BUYS = 6;
+  const FAST_COARSE_AMOUNTS = 4;
+  const FAST_REFINE_ROUTES = 4;
+  const QUOTE_CONCURRENCY = 6;
+  const TARGET_CONCURRENCY = 2;
+  const TARGET_QUOTE_CONCURRENCY = 4;
+  const SCAN_BUDGET_MS = 270_000;
+  const RPC_ATTEMPT_TIMEOUT_MS = 5_500;
+  const QUOTE_ATTEMPT_TIMEOUT_MS = 2_800;
+  const PRIORITY_PHASE_MS = 45_000;
+  const FINAL_REFINE_RESERVE_MS = 60_000;
+  const EXECUTION_RPC_TIMEOUT_MS = 12_000;
+  const EVALUATION_RESERVE_MS = 75_000;
+  const MAX_DIAGNOSTIC_EVENTS = 160;
+  const FINAL_REVALIDATION_ROUTES = 8;
+  const FINAL_REVALIDATION_CONCURRENCY = 3;
+  const RPC_CIRCUIT_FAILURES = 2;
+  const RPC_CIRCUIT_OPEN_MS = 30_000;
+  const QUOTE_CACHE_LATEST_MS = 8_000;
+  const QUOTE_CACHE_PENDING_MS = 900;
+  const QUOTE_CACHE_NULL_MS = 1_200;
+  const POOL_EXISTS_TTL_MS = 30 * 60_000;
+  const POOL_MISSING_TTL_MS = 5 * 60_000;
+  const MARKET_PRUNE_MAX_LOSS_BPS = 50;
+  const MARKET_PRUNE_MAX_LOSS_USDC = 250_000n;
+  const FAST_UNI_FEE_TIERS = [100, 500, 3000];
+  const FAST_PANCAKE_FEE_TIERS = [100, 500, 2500, 3000];
+
+  const NETWORKS = {
+    base: {
+      key:"base", name:"Base", chainId:8453n, chainHex:"0x2105",
+      rpc:["https://mainnet-preconf.base.org","https://mainnet.base.org","https://base-rpc.publicnode.com"],
+      explorer:"https://basescan.org", altName:"Aerodrome",
+      morpho:"0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb",
+      usdc:"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      weth:"0x4200000000000000000000000000000000000006",
+      cbeth:"0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22",
+      wsteth:"0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452",
+      aero:"0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+      usdbc:"0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",
+      eurc:"0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42",
+      cbbtc:"0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+      uniFactory:"0x33128a8fc17869897dce68ed026d694621f6fdfd",
+      uniQuoter:"0x3d4e44eb1374240ce5f1b871ab261cd16335b76a",
+      uniRouter:"0x2626664c2603336e57b271c5c0b26f421741e481",
+      altRouter:"0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43",
+      altFactory:"0x420dd381b31aef6683db6b902084cb0ffece40da",
+      slipFactory:"0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a",
+      slipQuoter:"0x254cf9e1e6e233aa1ac962cb9b05b2cfeaae15b0",
+      slipRouter:"0xbe6d8f0d05cc4be24d5167a3ef062215be6d18a5",
+      pancakeFactory:"0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865",
+      pancakeQuoter:"0xb048bbc1ee6b733fffcfb9e9cef7375518e25997",
+      pancakeRouter:"0x1b81d678ffb9c0263b24a97847620c99d213eb14",
+      gasOracle:"0x420000000000000000000000000000000000000f"
+    }
+  };
+
+  const TARGETS = [
+    {key:"weth", symbol:"WETH", address:NETWORKS.base.weth, aeroModes:[false]},
+    {key:"cbeth", symbol:"cbETH", address:NETWORKS.base.cbeth, aeroModes:[false]},
+    {key:"wsteth", symbol:"wstETH", address:NETWORKS.base.wsteth, aeroModes:[false]},
+    {key:"cbbtc", symbol:"cbBTC", address:NETWORKS.base.cbbtc, aeroModes:[false]},
+    {key:"aero", symbol:"AERO", address:NETWORKS.base.aero, aeroModes:[false]},
+    {key:"usdbc", symbol:"USDbC", address:NETWORKS.base.usdbc, aeroModes:[false,true]},
+    {key:"eurc", symbol:"EURC", address:NETWORKS.base.eurc, aeroModes:[false,true]}
+  ];
+
+  const ERC20_ABI = ["function balanceOf(address) view returns (uint256)","function decimals() view returns (uint8)","function symbol() view returns (string)"];
+  const QUOTER_ABI = ["function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"];
+  const SLIP_QUOTER_ABI = ["function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,int24 tickSpacing,uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)"];
+  const SLIP_FACTORY_ABI = [
+    "function tickSpacings() view returns (int24[])",
+    "function getPool(address tokenA,address tokenB,int24 tickSpacing) view returns (address pool)"
+  ];
+  const UNI_FACTORY_ABI = ["function getPool(address tokenA,address tokenB,uint24 fee) view returns (address pool)"];
+  const UNI_POOL_ABI = ["function liquidity() view returns (uint128)"];
+  const AERO_ABI = [
+    "function getAmountsOut(uint256 amountIn,(address from,address to,bool stable,address factory)[] routes) view returns (uint256[] amounts)"
+  ];
+  const AERO_FACTORY_ABI = [
+    "function getPool(address tokenA,address tokenB,bool stable) view returns (address pool)",
+    "function isPool(address pool) view returns (bool)"
+  ];
+  const AERO_POOL_ABI = [
+    "function getAmountOut(uint256 amountIn,address tokenIn) view returns (uint256 amountOut)"
+  ];
+  const GAS_ORACLE_ABI = ["function getL1FeeUpperBound(uint256 txSize) view returns (uint256)","function getOperatorFee(uint256 gasUsed) view returns (uint256)"];
+  const EXECUTOR_ABI = [
+    "function owner() view returns (address)",
+    "function BASE_CHAIN_ID() view returns (uint256)",
+    "function MORPHO() view returns (address)",
+    "function USDC() view returns (address)",
+    "function WETH() view returns (address)",
+    "function CBETH() view returns (address)",
+    "function WSTETH() view returns (address)",
+    "function AERO() view returns (address)",
+    "function USDBC() view returns (address)",
+    "function EURC() view returns (address)",
+    "function CBBTC() view returns (address)",
+    "function UNISWAP_ROUTER() view returns (address)",
+    "function AERODROME_ROUTER() view returns (address)",
+    "function AERODROME_FACTORY() view returns (address)",
+    "function SLIPSTREAM_ROUTER() view returns (address)",
+    "function PANCAKE_ROUTER() view returns (address)",
+    "function MAX_LOAN_AMOUNT() view returns (uint256)",
+    "function MIN_PROFIT_FLOOR() view returns (uint256)",
+    "function paused() view returns (bool)",
+    "function setPaused(bool newPaused)",
+    "function isSupportedTarget(address target) pure returns (bool)",
+    "function startArbitrage((uint256 amount,address target,uint8 buyVenue,uint8 sellVenue,uint24 buyV3Fee,uint24 sellV3Fee,int24 buySlipstreamTickSpacing,int24 sellSlipstreamTickSpacing,bool buyAerodromeStable,bool sellAerodromeStable,uint256 minTargetOut,uint256 minUsdcOut,uint256 minProfit,uint256 deadline) plan) returns (uint256 realizedProfit)",
+    "function withdrawToken(address token)"
+  ];
+
+  let publicProviders = new Map();
+  const rpcProvidersByUrl = new Map();
+  const rpcHealth = new Map();
+  const verifiedReadProviders = new WeakSet();
+  let activeRpcUrl = null;
+  let provider = null, signer = null, account = null, premiumBps = 0n;
+  let compiledAbi = null, compiledBytecode = null, compiledRuntimeBytecode = null, executor = null, executorAddress = null, executorBytecodeVerified = false;
+  let confirmedRoute = null, exactPlan = null, exactContext = null, exactValidUntil = 0, webSolcPromise = null;
+  let monitorTimer = null, countdownTimer = null, monitorBusy = false, nextRunAt = 0;
+  let lastPositiveFingerprint = null, lastPositiveBlock = null, positiveCount = 0;
+  let lastScanSnapshot = null, wakeLock = null;
+  let activeScanDeadlineAt = 0, scanBudgetTimer = null, scanPartialRows = [];
+  let poolAvailabilityCache = new Map(), quoteResultCache = new Map();
+  let quoteDiagnosticEvents = [], quoteDiagnosticCounts = new Map(), quoteDiagnosticTotal = 0;
+  let quoteCacheHits = 0, quoteCacheMisses = 0, rpcFallbackCount = 0, marketPrunedCount = 0;
+
+  class ScanDeadlineError extends Error {
+    constructor(message="A consulta atingiu o limite rígido de 4 minutos e 30 segundos.") {
+      super(message); this.name="ScanDeadlineError";
+    }
+  }
+
+  const $ = id => document.getElementById(id);
+  const show = (id,text,cls="") => { const el=$(id); el.className="status "+cls; el.textContent=text; };
+  const errText = e => e?.shortMessage || e?.reason || e?.info?.error?.message || e?.message || String(e);
+  const sleep = ms => new Promise(r=>setTimeout(r,ms));
+  const ceilDiv = (a,b)=>(a+b-1n)/b;
+  const bpsDown = (v,bps)=>v*BigInt(10000-bps)/10000n;
+  const fmtUSDC = (v,d=6)=>Number(ethers.formatUnits(v,6)).toFixed(d).replace(/0+$/,"" ).replace(/\.$/,"");
+  const fmtGwei = v=>Number(ethers.formatUnits(v,9)).toFixed(4).replace(/0+$/,"" ).replace(/\.$/,"");
+
+  function shortAddress(a) {
+    const s=String(a||"");
+    return s.length>12?s.slice(0,6)+"…"+s.slice(-4):s;
+  }
+
+  function diagnosticKey(venue,status) { return `${venue}:${status}`; }
+
+  function noteQuoteDiagnostic(venue,status,detail={}) {
+    const key=diagnosticKey(venue,status);
+    quoteDiagnosticCounts.set(key,(quoteDiagnosticCounts.get(key)||0)+1);
+    quoteDiagnosticTotal++;
+    const event={
+      at:new Date().toISOString(),venue,status,
+      tokenIn:detail.tokenIn||null,tokenOut:detail.tokenOut||null,
+      parameter:detail.parameter??null,blockTag:detail.blockTag??null,
+      error:detail.error?String(detail.error).slice(0,280):null
+    };
+    if(quoteDiagnosticEvents.length<MAX_DIAGNOSTIC_EVENTS) quoteDiagnosticEvents.push(event);
+    else if(status!=="ok") {
+      const replaceIndex=quoteDiagnosticEvents.findIndex(x=>x.status==="ok");
+      if(replaceIndex>=0) quoteDiagnosticEvents.splice(replaceIndex,1);
+      else quoteDiagnosticEvents.shift();
+      quoteDiagnosticEvents.push(event);
+    }
+    if(status!=="ok"||quoteDiagnosticTotal%10===0) updateQuoteDiagnosticUi();
+  }
+
+  function diagnosticSummaryObject() {
+    const result={};
+    for(const [key,value] of quoteDiagnosticCounts) result[key]=value;
+    return result;
+  }
+
+  function updateQuoteDiagnosticUi() {
+    if(!$('quoteDiagnosticsSummary')) return;
+    let ok=0,missing=0,failed=0,pruned=0;
+    for(const [key,value] of quoteDiagnosticCounts) {
+      if(key.endsWith(':ok')) ok+=value;
+      else if(key.endsWith(':pool_missing')) missing+=value;
+      else if(key.endsWith(':market_pruned')) pruned+=value;
+      else failed+=value;
+    }
+    $('quoteDiagnosticsSummary').textContent=`${ok} ok • ${missing} sem pool • ${pruned} podadas • ${failed} falhas • ${quoteCacheHits} cache • ${rpcFallbackCount} fallback`;
+  }
+
+  function venueDiagnosticName(venue) {
+    return VENUE_NAMES[venue]||String(venue);
+  }
+
+  function prunePoolCache(now=Date.now()) {
+    for(const [key,entry] of poolAvailabilityCache) if(!entry||entry.expiresAt<=now) poolAvailabilityCache.delete(key);
+  }
+
+  function resetQuoteDiagnostics() {
+    prunePoolCache();
+    quoteResultCache=new Map();
+    quoteDiagnosticEvents=[];
+    quoteDiagnosticCounts=new Map();
+    quoteDiagnosticTotal=0;
+    quoteCacheHits=0;
+    quoteCacheMisses=0;
+    rpcFallbackCount=0;
+    marketPrunedCount=0;
+    if($('completeQuoteCount')) $('completeQuoteCount').textContent='0';
+    updateQuoteDiagnosticUi();
+  }
+
+  function providerRpcUrl(p) {
+    return p?.__flashloanRpcUrl||null;
+  }
+
+  function rpcHealthEntry(url) {
+    if(!rpcHealth.has(url)) rpcHealth.set(url,{failures:0,openUntil:0,lastLatencyMs:null,lastError:null});
+    return rpcHealth.get(url);
+  }
+
+  function markRpcSuccess(url,latencyMs) {
+    if(!url) return;
+    const health=rpcHealthEntry(url);
+    health.failures=0;
+    health.openUntil=0;
+    health.lastLatencyMs=latencyMs;
+    health.lastError=null;
+  }
+
+  function markRpcFailure(url,error) {
+    if(!url) return;
+    const health=rpcHealthEntry(url);
+    health.failures++;
+    health.lastError=errText(error).slice(0,180);
+    if(health.failures>=RPC_CIRCUIT_FAILURES) health.openUntil=Date.now()+RPC_CIRCUIT_OPEN_MS;
+  }
+
+  function orderedHealthyRpcUrls(cfg,preferredP=null) {
+    const preferredCandidate=providerRpcUrl(preferredP)||activeRpcUrl;
+    const preferred=cfg.rpc.includes(preferredCandidate)?preferredCandidate:null;
+    const urls=[preferred,...cfg.rpc].filter((url,index,array)=>url&&array.indexOf(url)===index);
+    const now=Date.now();
+    const healthy=urls.filter(url=>rpcHealthEntry(url).openUntil<=now);
+    if(healthy.length) return healthy;
+    return urls.sort((a,b)=>rpcHealthEntry(a).openUntil-rpcHealthEntry(b).openUntil);
+  }
+
+  async function providerForRpcUrl(cfg,url) {
+    if(rpcProvidersByUrl.has(url)) return rpcProvidersByUrl.get(url);
+    let p;
+    try {
+      p=new ethers.JsonRpcProvider(url,Number(cfg.chainId),{
+        staticNetwork:true,batchMaxCount:1,batchStallTime:0,cacheTimeout:0
+      });
+      p.__flashloanRpcUrl=url;
+      const chainHex=await withRpcTimeout('chainId '+url,()=>p.send('eth_chainId',[]),RPC_ATTEMPT_TIMEOUT_MS);
+      if(BigInt(chainHex)!==cfg.chainId) throw new Error('chainId incorreto');
+      await withRpcTimeout('bloco '+url,()=>p.send('eth_blockNumber',[]),RPC_ATTEMPT_TIMEOUT_MS);
+      await withRpcTimeout('pending '+url,()=>p.send('eth_getBalance',[cfg.morpho,REVALIDATION_BLOCK_TAG]),RPC_ATTEMPT_TIMEOUT_MS);
+      rpcProvidersByUrl.set(url,p);
+      markRpcSuccess(url,0);
+      return p;
+    } catch(e) {
+      markRpcFailure(url,e);
+      try { p?.destroy?.(); } catch(_) {}
+      rpcProvidersByUrl.delete(url);
+      throw e;
+    }
+  }
+
+  async function withProviderFallback(cfg,preferredP,label,worker,attempts=3,timeoutMs=QUOTE_ATTEMPT_TIMEOUT_MS) {
+    let last,used=0;
+    const preferredUrl=providerRpcUrl(preferredP);
+    for(const url of orderedHealthyRpcUrls(cfg,preferredP)) {
+      if(used>=attempts) break;
+      used++;
+      let candidate;
+      try { candidate=await providerForRpcUrl(cfg,url); }
+      catch(e) { last=e; continue; }
+      const started=Date.now();
+      try {
+        const value=await withRpcTimeout(label,()=>worker(candidate),timeoutMs);
+        markRpcSuccess(url,Date.now()-started);
+        if(preferredUrl&&url!==preferredUrl) rpcFallbackCount++;
+        return value;
+      } catch(e) {
+        last=e;
+        if(isDeadlineError(e)) throw e;
+        if(!isTransientRpcError(e)) throw e;
+        markRpcFailure(url,e);
+      }
+    }
+    if(preferredP&&!preferredUrl&&used<attempts) {
+      try { return await withRpcTimeout(label,()=>worker(preferredP),timeoutMs); }
+      catch(e) { last=e; if(isDeadlineError(e)) throw e; }
+    }
+    throw last||new Error(label+': todos os RPCs falharam');
+  }
+
+  async function validatePoolAddress(cfg,p,venue,tokenIn,tokenOut,param,blockTag=null) {
+    const a=String(tokenIn).toLowerCase(),b=String(tokenOut).toLowerCase();
+    const pair=a<b?`${a}:${b}`:`${b}:${a}`;
+    const cacheKey=[venue,pair,String(param)].join('|');
+    const now=Date.now();
+    const cached=poolAvailabilityCache.get(cacheKey);
+    if(cached&&cached.expiresAt>now) return cached.promise;
+    if(cached) poolAvailabilityCache.delete(cacheKey);
+
+    const entry={expiresAt:now+POOL_EXISTS_TTL_MS,promise:null};
+    entry.promise=(async()=>{
+      const overrides=blockTag===null?{}:{blockTag};
+      let factoryAddress,abi,args;
+      if(venue===VENUE.UNI) {
+        factoryAddress=cfg.uniFactory; abi=UNI_FACTORY_ABI; args=[tokenIn,tokenOut,Number(param)];
+      } else if(venue===VENUE.PANCAKE) {
+        factoryAddress=cfg.pancakeFactory; abi=UNI_FACTORY_ABI; args=[tokenIn,tokenOut,Number(param)];
+      } else if(venue===VENUE.SLIP) {
+        factoryAddress=cfg.slipFactory; abi=SLIP_FACTORY_ABI; args=[tokenIn,tokenOut,Number(param)];
+      } else if(venue===VENUE.AERO) {
+        factoryAddress=cfg.altFactory; abi=AERO_FACTORY_ABI; args=[tokenIn,tokenOut,Boolean(param)];
+      } else return {exists:false,address:ethers.ZeroAddress};
+      try {
+        const pool=await withProviderFallback(cfg,p,`pool ${venueDiagnosticName(venue)}`,candidate=>{
+          const factory=new ethers.Contract(factoryAddress,abi,candidate);
+          return factory.getPool.staticCall(...args,overrides);
+        },3);
+        if(!pool||pool===ethers.ZeroAddress) {
+          entry.expiresAt=Date.now()+POOL_MISSING_TTL_MS;
+          noteQuoteDiagnostic(venue,'pool_missing',{tokenIn,tokenOut,parameter:param,blockTag});
+          return {exists:false,address:ethers.ZeroAddress};
+        }
+        if(venue===VENUE.AERO) {
+          let approved=false;
+          try {
+            approved=await withProviderFallback(cfg,p,'isPool Aerodrome',candidate=>{
+              const factory=new ethers.Contract(factoryAddress,abi,candidate);
+              return factory.isPool.staticCall(pool,overrides);
+            },2);
+          } catch(e) {
+            const code=await withProviderFallback(cfg,p,'bytecode pool Aerodrome',candidate=>candidate.getCode(pool,blockTag??undefined),2);
+            approved=code!=='0x';
+          }
+          if(!approved) {
+            entry.expiresAt=Date.now()+POOL_MISSING_TTL_MS;
+            noteQuoteDiagnostic(venue,'pool_missing',{tokenIn,tokenOut,parameter:param,blockTag,error:'Factory não reconheceu o pool'});
+            return {exists:false,address:ethers.ZeroAddress};
+          }
+        }
+        entry.expiresAt=Date.now()+POOL_EXISTS_TTL_MS;
+        return {exists:true,address:pool};
+      } catch(e) {
+        poolAvailabilityCache.delete(cacheKey);
+        if(isDeadlineError(e)) throw e;
+        noteQuoteDiagnostic(venue,'pool_check_error',{tokenIn,tokenOut,parameter:param,blockTag,error:errText(e)});
+        return {exists:false,address:ethers.ZeroAddress,indeterminate:true};
+      }
+    })();
+    poolAvailabilityCache.set(cacheKey,entry);
+    return entry.promise;
+  }
+
+  function scanRemainingMs() {
+    return activeScanDeadlineAt ? Math.max(0,activeScanDeadlineAt-Date.now()) : Number.POSITIVE_INFINITY;
+  }
+
+  function ensureScanBudget(minimumMs=1) {
+    if(activeScanDeadlineAt&&scanRemainingMs()<minimumMs) throw new ScanDeadlineError();
+  }
+
+  function isDeadlineError(e) {
+    return e instanceof ScanDeadlineError || e?.name==="ScanDeadlineError";
+  }
+
+  async function withRpcTimeout(label,task,timeoutMs=RPC_ATTEMPT_TIMEOUT_MS) {
+    ensureScanBudget();
+    const allowed=Math.max(1,Math.min(timeoutMs,scanRemainingMs()));
+    let timer;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(task),
+        new Promise((_,reject)=>{timer=setTimeout(()=>reject(
+          activeScanDeadlineAt&&scanRemainingMs()<=0
+            ? new ScanDeadlineError()
+            : new Error(label+": tempo esgotado")
+        ),allowed);})
+      ]);
+    } finally { if(timer) clearTimeout(timer); }
+  }
+
+  async function withExecutionTimeout(label,task,timeoutMs=EXECUTION_RPC_TIMEOUT_MS) {
+    const allowed=Math.max(1,Number(timeoutMs)||EXECUTION_RPC_TIMEOUT_MS);
+    let timer;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(task),
+        new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label+": tempo esgotado")),allowed);})
+      ]);
+    } finally { if(timer) clearTimeout(timer); }
+  }
+
+  function startScanBudgetClock() {
+    activeScanDeadlineAt=Date.now()+SCAN_BUDGET_MS;
+    scanPartialRows=[];
+    resetQuoteDiagnostics();
+    const update=()=>{
+      const remaining=Math.max(0,scanRemainingMs());
+      const total=Math.ceil(remaining/1000),min=Math.floor(total/60),sec=String(total%60).padStart(2,"0");
+      if($("scanBudgetState")) $("scanBudgetState").textContent=`${min}:${sec}`;
+    };
+    update(); scanBudgetTimer=setInterval(update,500);
+  }
+
+  function stopScanBudgetClock() {
+    if(scanBudgetTimer){clearInterval(scanBudgetTimer);scanBudgetTimer=null;}
+    activeScanDeadlineAt=0;
+    if($("scanBudgetState")) $("scanBudgetState").textContent="4:30 máximo";
+  }
+
+  function isTransientRpcError(e) {
+    const m=errText(e).toLowerCase();
+    return m.includes("missing response for request") || m.includes("rate limit") ||
+      m.includes("too many requests") || m.includes("429") || m.includes("timeout") ||
+      m.includes("tempo esgotado") || m.includes("network error") ||
+      m.includes("failed to fetch") || m.includes("socket") || m.includes("server error");
+  }
+
+  async function retryRpc(label, task, attempts=3) {
+    let last;
+    for(let attempt=0;attempt<attempts;attempt++) {
+      ensureScanBudget();
+      try { return await withRpcTimeout(label,task); }
+      catch(e) {
+        last=e;
+        if(isDeadlineError(e)) throw e;
+        if(!isTransientRpcError(e) || attempt===attempts-1) throw e;
+        const delay=180*(2**attempt)+Math.floor(Math.random()*90);
+        if(activeScanDeadlineAt&&scanRemainingMs()<=delay) throw new ScanDeadlineError();
+        await sleep(delay);
+      }
+    }
+    throw new Error(label+": "+errText(last));
+  }
+
+  async function retryQuoteRpc(label, task, attempts=2) {
+    let last;
+    for(let attempt=0;attempt<attempts;attempt++) {
+      ensureScanBudget();
+      try { return await withRpcTimeout(label,task,QUOTE_ATTEMPT_TIMEOUT_MS); }
+      catch(e) {
+        last=e;
+        if(isDeadlineError(e)) throw e;
+        if(!isTransientRpcError(e) || attempt===attempts-1) throw e;
+        const delay=90+Math.floor(Math.random()*70);
+        if(activeScanDeadlineAt&&scanRemainingMs()<=delay) throw new ScanDeadlineError();
+        await sleep(delay);
+      }
+    }
+    throw new Error(label+": "+errText(last));
+  }
+
+  async function ensureEthers() {
+    if(window.ethers) return;
+    for(const url of [
+      "https://cdn.jsdelivr.net/npm/ethers@6.13.5/dist/ethers.umd.min.js",
+      "https://unpkg.com/ethers@6.13.5/dist/ethers.umd.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.5/ethers.umd.min.js"
+    ]) {
+      try {
+        await withRpcTimeout("carregamento do ethers",()=>new Promise((res,rej)=>{
+          const s=document.createElement("script");s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);
+        }),8000);
+        if(window.ethers) return;
+      } catch(e) { if(isDeadlineError(e)) throw e; }
+    }
+    throw new Error("A biblioteca Ethereum não carregou.");
+  }
+
+  function parseAmounts() {
+    const raw=$("amounts").value.split(",").map(x=>x.trim()).filter(Boolean);
+    const unique=[...new Set(raw)];
+    if(!unique.length||unique.length>12) throw new Error("Use entre 1 e 12 valores iniciais.");
+    return unique.map(v=>{
+      const n=ethers.parseUnits(v.replace(",","."),6);
+      if(n<MIN_SCAN_AMOUNT||n>MAX_SCAN_AMOUNT) throw new Error("Valores: 10 a 50.000 USDC.");
+      return n;
+    });
+  }
+
+  function inputs() {
+    const slippage=Number($("slippage").value.trim());
+    const minProfit=ethers.parseUnits($("minProfit").value.trim().replace(",","."),6);
+    const intervalSeconds=Number($("intervalSeconds").value.trim());
+    const adaptiveRefine=$("adaptiveRefine").checked;
+    const divineMode=$("divineMode")?.checked!==false;
+    const selected=[...document.querySelectorAll("input[data-target]:checked")].map(el=>el.dataset.target);
+    const targets=TARGETS.filter(t=>selected.includes(t.key));
+    if(!targets.length) throw new Error("Selecione pelo menos um ativo-alvo.");
+    if(!Number.isInteger(slippage)||slippage<1||slippage>50) throw new Error("Margem agressiva: 1 a 50 bps.");
+    if(minProfit<10000n) throw new Error("Lucro mínimo agressivo: pelo menos 0,01 USDC.");
+    if(!Number.isInteger(intervalSeconds)||intervalSeconds<6||intervalSeconds>300) throw new Error("Intervalo: 6 a 300 segundos.");
+    return {amounts:parseAmounts(),slippage,minProfit,intervalSeconds,adaptiveRefine,divineMode,targets};
+  }
+
+  async function workingProvider(cfg,rotate=false) {
+    const cached=publicProviders.get(cfg.key);
+    if(cached&&!rotate) {
+      const url=providerRpcUrl(cached);
+      if(!url||rpcHealthEntry(url).openUntil<=Date.now()) return cached;
+    }
+    if(rotate&&cached) {
+      const currentUrl=providerRpcUrl(cached);
+      if(currentUrl) rpcHealthEntry(currentUrl).openUntil=Date.now()+RPC_CIRCUIT_OPEN_MS;
+      publicProviders.delete(cfg.key);
+    }
+    let last;
+    for(const url of orderedHealthyRpcUrls(cfg,rotate?null:cached)) {
+      try {
+        const p=await providerForRpcUrl(cfg,url);
+        publicProviders.set(cfg.key,p);
+        activeRpcUrl=url;
+        if($('rpcState')) $('rpcState').textContent=(url.includes('preconf')?'Flashblocks oficial':'fallback Base')+' • circuito ativo';
+        return p;
+      } catch(e) { last=e; }
+    }
+    if(window.ethereum) {
+      try {
+        const chainHex=await withRpcTimeout('chainId da carteira',()=>window.ethereum.request({method:'eth_chainId'}));
+        if(BigInt(chainHex)===cfg.chainId) {
+          const p=new ethers.BrowserProvider(window.ethereum);
+          await withRpcTimeout('carteira',()=>p.getBlockNumber(),RPC_ATTEMPT_TIMEOUT_MS);
+          publicProviders.set(cfg.key,p);
+          activeRpcUrl='wallet';
+          if($('rpcState')) $('rpcState').textContent='RPC da carteira • último fallback';
+          return p;
+        }
+      } catch(e){last=e;}
+    }
+    throw new Error('Não foi possível ler a Base/Flashblocks. Detalhe: '+errText(last));
+  }
+
+  async function codeBytes(p,address) {
+    const code=await retryRpc("bytecode "+address,()=>p.getCode(address),3);
+    return code==="0x"?0:(code.length-2)/2;
+  }
+
+  async function verifyReadContracts(cfg,p) {
+    if(verifiedReadProviders.has(p)) return;
+    const entries=[cfg.morpho,cfg.usdc,cfg.weth,cfg.cbeth,cfg.wsteth,cfg.aero,cfg.usdbc,cfg.eurc,cfg.cbbtc,cfg.uniFactory,cfg.uniQuoter,cfg.uniRouter,cfg.altRouter,cfg.altFactory,cfg.slipFactory,cfg.slipQuoter,cfg.slipRouter,cfg.pancakeFactory,cfg.pancakeQuoter,cfg.pancakeRouter];
+    const sizes=await mapLimit(entries,QUOTE_CONCURRENCY,a=>codeBytes(p,a));
+    if(sizes.some(x=>x===0)) throw new Error("Um endereço configurado não possui bytecode.");
+    verifiedReadProviders.add(p);
+  }
+
+  async function quoteUni(cfg,p,tokenIn,tokenOut,amountIn,fee,blockTag=null) {
+    const detail={tokenIn,tokenOut,parameter:fee,blockTag};
+    try {
+      const pool=await validatePoolAddress(cfg,p,VENUE.UNI,tokenIn,tokenOut,fee,blockTag);
+      if(!pool.exists) return null;
+      const overrides=blockTag===null?{}:{blockTag};
+      const r=await withProviderFallback(cfg,p,'cotação Uniswap',candidate=>{
+        const q=new ethers.Contract(cfg.uniQuoter,QUOTER_ABI,candidate);
+        return q.quoteExactInputSingle.staticCall({tokenIn,tokenOut,amountIn,fee,sqrtPriceLimitX96:0},overrides);
+      },3);
+      const out=r.amountOut??r[0],gas=r.gasEstimate??r[3]??130000n;
+      if(out>0n) { noteQuoteDiagnostic(VENUE.UNI,'ok',detail); return {out,gas,pool:pool.address}; }
+      noteQuoteDiagnostic(VENUE.UNI,'zero_output',detail); return null;
+    } catch(e) {
+      if(isDeadlineError(e)) throw e;
+      noteQuoteDiagnostic(VENUE.UNI,isTransientRpcError(e)?'timeout_or_rpc':'revert',{...detail,error:errText(e)});
+      return null;
+    }
+  }
+
+  async function quotePancake(cfg,p,tokenIn,tokenOut,amountIn,fee,blockTag=null) {
+    const detail={tokenIn,tokenOut,parameter:fee,blockTag};
+    try {
+      const pool=await validatePoolAddress(cfg,p,VENUE.PANCAKE,tokenIn,tokenOut,fee,blockTag);
+      if(!pool.exists) return null;
+      const overrides=blockTag===null?{}:{blockTag};
+      const r=await withProviderFallback(cfg,p,'cotação Pancake',candidate=>{
+        const q=new ethers.Contract(cfg.pancakeQuoter,QUOTER_ABI,candidate);
+        return q.quoteExactInputSingle.staticCall({tokenIn,tokenOut,amountIn,fee,sqrtPriceLimitX96:0},overrides);
+      },3);
+      const out=r.amountOut??r[0],gas=r.gasEstimate??r[3]??FALLBACK_SWAP_GAS[VENUE.PANCAKE];
+      if(out>0n) { noteQuoteDiagnostic(VENUE.PANCAKE,'ok',detail); return {out,gas,pool:pool.address}; }
+      noteQuoteDiagnostic(VENUE.PANCAKE,'zero_output',detail); return null;
+    } catch(e) {
+      if(isDeadlineError(e)) throw e;
+      noteQuoteDiagnostic(VENUE.PANCAKE,isTransientRpcError(e)?'timeout_or_rpc':'revert',{...detail,error:errText(e)});
+      return null;
+    }
+  }
+
+  async function quoteAlt(cfg,p,tokenIn,tokenOut,amountIn,stable=false,blockTag=null) {
+    const detail={tokenIn,tokenOut,parameter:stable?'stable':'volatile',blockTag};
+    const overrides=blockTag===null?{}:{blockTag};
+    const poolInfo=await validatePoolAddress(cfg,p,VENUE.AERO,tokenIn,tokenOut,stable,blockTag);
+    if(!poolInfo.exists) return null;
+    try {
+      const out=await withProviderFallback(cfg,p,'cotação direta Aerodrome',candidate=>{
+        const pool=new ethers.Contract(poolInfo.address,AERO_POOL_ABI,candidate);
+        return pool.getAmountOut.staticCall(amountIn,tokenIn,overrides);
+      },2);
+      if(out>0n) { noteQuoteDiagnostic(VENUE.AERO,'ok',detail); return {out,source:'pool',pool:poolInfo.address}; }
+      noteQuoteDiagnostic(VENUE.AERO,'zero_output',detail);
+    } catch(e) {
+      if(isDeadlineError(e)) throw e;
+      noteQuoteDiagnostic(VENUE.AERO,isTransientRpcError(e)?'timeout_or_rpc':'direct_revert',{...detail,error:errText(e)});
+    }
+    try {
+      const amounts=await withProviderFallback(cfg,p,'cotação Aerodrome Router',candidate=>{
+        const router=new ethers.Contract(cfg.altRouter,AERO_ABI,candidate);
+        return router.getAmountsOut.staticCall(amountIn,[{from:tokenIn,to:tokenOut,stable,factory:cfg.altFactory}],overrides);
+      },2);
+      const out=amounts[amounts.length-1];
+      if(out>0n) { noteQuoteDiagnostic(VENUE.AERO,'ok',detail); return {out,source:'router',pool:poolInfo.address}; }
+      noteQuoteDiagnostic(VENUE.AERO,'zero_output',detail); return null;
+    } catch(e) {
+      if(isDeadlineError(e)) throw e;
+      noteQuoteDiagnostic(VENUE.AERO,isTransientRpcError(e)?'timeout_or_rpc':'router_revert',{...detail,error:errText(e)});
+      return null;
+    }
+  }
+
+  async function quoteSlip(cfg,p,tokenIn,tokenOut,amountIn,tickSpacing,blockTag=null) {
+    const detail={tokenIn,tokenOut,parameter:tickSpacing,blockTag};
+    try {
+      const pool=await validatePoolAddress(cfg,p,VENUE.SLIP,tokenIn,tokenOut,tickSpacing,blockTag);
+      if(!pool.exists) return null;
+      const overrides=blockTag===null?{}:{blockTag};
+      const r=await withProviderFallback(cfg,p,'cotação Slipstream',candidate=>{
+        const q=new ethers.Contract(cfg.slipQuoter,SLIP_QUOTER_ABI,candidate);
+        return q.quoteExactInputSingle.staticCall({tokenIn,tokenOut,amountIn,tickSpacing,sqrtPriceLimitX96:0},overrides);
+      },3);
+      const out=r.amountOut??r[0],gas=r.gasEstimate??r[3]??FALLBACK_SWAP_GAS[VENUE.SLIP];
+      if(out>0n) { noteQuoteDiagnostic(VENUE.SLIP,'ok',detail); return {out,gas,pool:pool.address}; }
+      noteQuoteDiagnostic(VENUE.SLIP,'zero_output',detail); return null;
+    } catch(e) {
+      if(isDeadlineError(e)) throw e;
+      noteQuoteDiagnostic(VENUE.SLIP,isTransientRpcError(e)?'timeout_or_rpc':'revert',{...detail,error:errText(e)});
+      return null;
+    }
+  }
+
+  function venueOptions(target,slipSpacings=SLIP_TICK_SPACINGS) {
+    return [
+      ...UNI_FEE_TIERS.map(v3Fee=>({venue:VENUE.UNI,v3Fee,slipstreamTickSpacing:0,aerodromeStable:false})),
+      ...target.aeroModes.map(aerodromeStable=>({venue:VENUE.AERO,v3Fee:0,slipstreamTickSpacing:0,aerodromeStable})),
+      ...slipSpacings.map(slipstreamTickSpacing=>({venue:VENUE.SLIP,v3Fee:0,slipstreamTickSpacing,aerodromeStable:false})),
+      ...PANCAKE_FEE_TIERS.map(v3Fee=>({venue:VENUE.PANCAKE,v3Fee,slipstreamTickSpacing:0,aerodromeStable:false}))
+    ];
+  }
+
+  function fastVenueOptions(target,slipSpacings=SLIP_TICK_SPACINGS) {
+    return [
+      ...FAST_UNI_FEE_TIERS.map(v3Fee=>({venue:VENUE.UNI,v3Fee,slipstreamTickSpacing:0,aerodromeStable:false})),
+      ...target.aeroModes.map(aerodromeStable=>({venue:VENUE.AERO,v3Fee:0,slipstreamTickSpacing:0,aerodromeStable})),
+      ...slipSpacings.slice(0,5).map(slipstreamTickSpacing=>({venue:VENUE.SLIP,v3Fee:0,slipstreamTickSpacing,aerodromeStable:false})),
+      ...FAST_PANCAKE_FEE_TIERS.map(v3Fee=>({venue:VENUE.PANCAKE,v3Fee,slipstreamTickSpacing:0,aerodromeStable:false}))
+    ];
+  }
+
+  function optionText(o) {
+    if(o.venue===VENUE.UNI) return `Uniswap ${o.v3Fee/10000}%`;
+    if(o.venue===VENUE.AERO) return `Aero ${o.aerodromeStable?"stable":"volatile"}`;
+    if(o.venue===VENUE.SLIP) return `Slipstream spacing ${o.slipstreamTickSpacing}`;
+    return `Pancake V3 ${o.v3Fee/10000}%`;
+  }
+
+  async function quoteVenueUncached(cfg,p,option,tokenIn,tokenOut,amountIn,blockTag=null) {
+    if(option.venue===VENUE.UNI) return quoteUni(cfg,p,tokenIn,tokenOut,amountIn,option.v3Fee,blockTag);
+    if(option.venue===VENUE.AERO) {
+      const q=await quoteAlt(cfg,p,tokenIn,tokenOut,amountIn,option.aerodromeStable,blockTag);
+      return q?{...q,gas:FALLBACK_SWAP_GAS[VENUE.AERO]}:null;
+    }
+    if(option.venue===VENUE.SLIP) return quoteSlip(cfg,p,tokenIn,tokenOut,amountIn,option.slipstreamTickSpacing,blockTag);
+    if(option.venue===VENUE.PANCAKE) return quotePancake(cfg,p,tokenIn,tokenOut,amountIn,option.v3Fee,blockTag);
+    return null;
+  }
+
+  async function quoteVenue(cfg,p,option,tokenIn,tokenOut,amountIn,blockTag=null) {
+    const key=[optionKey(option),String(tokenIn).toLowerCase(),String(tokenOut).toLowerCase(),amountIn.toString(),String(blockTag)].join('|');
+    const now=Date.now(),cached=quoteResultCache.get(key);
+    if(cached&&(!cached.settled||cached.expiresAt>now)) { quoteCacheHits++; return cached.promise; }
+    if(cached) quoteResultCache.delete(key);
+    quoteCacheMisses++;
+    const entry={expiresAt:now+QUOTE_CACHE_NULL_MS,settled:false,promise:null};
+    entry.promise=quoteVenueUncached(cfg,p,option,tokenIn,tokenOut,amountIn,blockTag).then(value=>{
+      entry.settled=true;
+      entry.expiresAt=Date.now()+(value?(blockTag===REVALIDATION_BLOCK_TAG?QUOTE_CACHE_PENDING_MS:QUOTE_CACHE_LATEST_MS):QUOTE_CACHE_NULL_MS);
+      return value;
+    }).catch(error=>{
+      quoteResultCache.delete(key);
+      throw error;
+    });
+    quoteResultCache.set(key,entry);
+    return entry.promise;
+  }
+
+  function optionKey(o) {
+    return [o.venue,o.v3Fee||0,o.slipstreamTickSpacing||0,o.aerodromeStable?1:0].join(":");
+  }
+
+  function routeTemplateKey(t) {
+    return [t.target.key,optionKey(t.firstOption),optionKey(t.secondOption)].join(":");
+  }
+
+  function smartOption(venue,param=0,stable=false) {
+    return {
+      venue,
+      v3Fee:(venue===VENUE.UNI||venue===VENUE.PANCAKE)?param:0,
+      slipstreamTickSpacing:venue===VENUE.SLIP?param:0,
+      aerodromeStable:venue===VENUE.AERO?Boolean(stable):false
+    };
+  }
+
+  function priorityTemplatesForTarget(target,slipSpacings=SLIP_TICK_SPACINGS) {
+    const spacing=slipSpacings.includes(1)?1:(slipSpacings[0]||1);
+    const uni100=smartOption(VENUE.UNI,100), uni500=smartOption(VENUE.UNI,500);
+    const cake100=smartOption(VENUE.PANCAKE,100), cake500=smartOption(VENUE.PANCAKE,500);
+    const slip=smartOption(VENUE.SLIP,spacing), aeroV=smartOption(VENUE.AERO,0,false);
+    const aeroS=smartOption(VENUE.AERO,0,true);
+    const pairs=target.key==="weth" ? [
+      [uni500,uni100],[cake100,uni100],[uni100,cake100],[slip,uni100],
+      [uni100,slip],[aeroV,uni100],[uni100,aeroV],[cake500,cake100]
+    ] : (target.aeroModes.includes(true) ? [
+      [aeroS,uni100],[uni100,aeroS],[slip,uni100],[uni100,slip],
+      [cake100,uni100],[uni500,uni100]
+    ] : [
+      [uni500,uni100],[slip,uni100],[uni100,slip],[cake500,uni500],
+      [uni500,cake500],[aeroV,uni500]
+    ]);
+    const seen=new Set(),out=[];
+    for(const [firstOption,secondOption] of pairs) {
+      if(optionKey(firstOption)===optionKey(secondOption)) continue;
+      const template={target,firstOption,secondOption,roughNet:0n,priority:true};
+      const key=routeTemplateKey(template);
+      if(seen.has(key)) continue;
+      seen.add(key); out.push(template);
+    }
+    return out;
+  }
+
+  function selectDiverseFirstQuotes(quotes,maxCount=FAST_DISCOVERY_BUYS) {
+    const sorted=[...quotes].filter(Boolean).sort((a,b)=>a.q.out===b.q.out?0:(a.q.out>b.q.out?-1:1));
+    const selected=[],seen=new Set();
+    for(const pass of [0,1]) {
+      for(const item of sorted) {
+        const sameVenue=selected.filter(x=>x.option.venue===item.option.venue).length;
+        if(sameVenue!==pass) continue;
+        const key=optionKey(item.option);
+        if(seen.has(key)) continue;
+        selected.push(item); seen.add(key);
+        if(selected.length>=maxCount) return selected;
+      }
+    }
+    for(const item of sorted) {
+      const key=optionKey(item.option);
+      if(seen.has(key)) continue;
+      selected.push(item); seen.add(key);
+      if(selected.length>=maxCount) break;
+    }
+    return selected;
+  }
+
+  function selectPriorityAmounts(amounts,maxCount=6) {
+    return selectFastAmounts(amounts,maxCount);
+  }
+
+
+  async function ethPriceUSDC(cfg,p,blockTag=null,slipSpacings=SLIP_TICK_SPACINGS) {
+    const one=10n**18n;
+    const jobs=[
+      ...FAST_UNI_FEE_TIERS.map(fee=>({kind:"uni",fee})),
+      {kind:"aero"},
+      ...slipSpacings.slice(0,5).map(spacing=>({kind:"slip",spacing})),
+      ...FAST_PANCAKE_FEE_TIERS.map(fee=>({kind:"pancake",fee}))
+    ];
+    let uniCount=0,slipCount=0,pancakeCount=0,aeroOk=false;
+    const found=await mapLimitBestEffort(jobs,QUOTE_CONCURRENCY,async job=>{
+      let q=null;
+      if(job.kind==="uni") q=await quoteUni(cfg,p,cfg.weth,cfg.usdc,one,job.fee,blockTag);
+      else if(job.kind==="aero") q=await quoteAlt(cfg,p,cfg.weth,cfg.usdc,one,false,blockTag);
+      else if(job.kind==="slip") q=await quoteSlip(cfg,p,cfg.weth,cfg.usdc,one,job.spacing,blockTag);
+      else q=await quotePancake(cfg,p,cfg.weth,cfg.usdc,one,job.fee,blockTag);
+      if(q?.out>0n) {
+        if(job.kind==="uni") uniCount++;
+        else if(job.kind==="aero") aeroOk=true;
+        else if(job.kind==="slip") slipCount++;
+        else pancakeCount++;
+        return q.out;
+      }
+      return null;
+    });
+    const quotes=found.filter(v=>v&&v>0n);
+    if(!quotes.length) throw new Error("As DEXs não devolveram uma cotação WETH/USDC.");
+    const ordered=[...quotes].sort((a,b)=>a===b?0:(a>b?1:-1));
+    return {price:ordered[Math.floor(ordered.length/2)],uniCount,slipCount,pancakeCount,aeroOk,sources:quotes.length};
+  }
+
+  async function feeEstimateUSDC(cfg,p,gasUnits,txSize,ethPrice,knownGasPrice=null,knownL1Wei=null,operatorCache=null,strict=false) {
+    let rawGasPrice=knownGasPrice;
+    if(rawGasPrice===null) {
+      const fd=await withProviderFallback(cfg,p,"feeData",candidate=>candidate.getFeeData(),2,RPC_ATTEMPT_TIMEOUT_MS);
+      rawGasPrice=fd.gasPrice||fd.maxFeePerGas;
+    }
+    if(!rawGasPrice) throw new Error("Preço de gás indisponível.");
+    // maxFeePerGas é o teto de inclusão, não o custo efetivo normalmente pago.
+    // O scanner usa gasPrice atual + 10%; a validação exata aplica buffers maiores.
+    const gasPrice=ceilDiv(rawGasPrice*110n,100n);
+    let l1Wei=knownL1Wei;
+    if(l1Wei===null) {
+      l1Wei=0n;
+      try {
+        l1Wei=await withProviderFallback(cfg,p,"taxa L1",candidate=>{
+          const oracle=new ethers.Contract(cfg.gasOracle,GAS_ORACLE_ABI,candidate);
+          return oracle.getL1FeeUpperBound(txSize,{blockTag:REVALIDATION_BLOCK_TAG});
+        },2,RPC_ATTEMPT_TIMEOUT_MS);
+      } catch(e) {
+        if(isDeadlineError(e)) throw e;
+        if(strict) throw new Error("Não foi possível confirmar a taxa de publicação L1: "+errText(e));
+      }
+    }
+    let operatorWei=0n;
+    const operatorKey=gasUnits.toString();
+    if(operatorCache?.has(operatorKey)) {
+      operatorWei=operatorCache.get(operatorKey);
+    } else {
+      try {
+        operatorWei=await withProviderFallback(cfg,p,"taxa operador",candidate=>{
+          const oracle=new ethers.Contract(cfg.gasOracle,GAS_ORACLE_ABI,candidate);
+          return oracle.getOperatorFee(gasUnits,{blockTag:REVALIDATION_BLOCK_TAG});
+        },2,RPC_ATTEMPT_TIMEOUT_MS);
+      } catch(e) {
+        if(isDeadlineError(e)) throw e;
+        if(strict) throw new Error("Não foi possível confirmar a taxa do operador da Base: "+errText(e));
+      }
+      operatorCache?.set(operatorKey,operatorWei);
+    }
+    const l2Wei=gasUnits*gasPrice;
+    const totalWei=l2Wei+l1Wei+operatorWei;
+    return {
+      gasPrice,l1Wei,l2Wei,operatorWei,totalWei,
+      l1USDC:l1Wei*ethPrice/10n**18n,
+      l2USDC:l2Wei*ethPrice/10n**18n,
+      operatorUSDC:operatorWei*ethPrice/10n**18n,
+      usdc:totalWei*ethPrice/10n**18n
+    };
+  }
+
+  function setNetworkState(cfg,best,text,cls="") {
+    $("baseBest").textContent=best?fmtUSDC(best.net,6)+" USDC":"—";
+    $("baseState").textContent=text;
+  }
+
+  function amountKey(v){return v.toString();}
+
+  function buildRefinedAmounts(bestAmounts,existing) {
+    const known=new Set(existing.map(amountKey));
+    const result=[];
+    for(const bestAmount of bestAmounts.slice(0,5)) for(const factor of REFINE_BPS) {
+      let value=bestAmount*factor/10000n;
+      value=value/250_000n*250_000n;
+      if(value<MIN_SCAN_AMOUNT||value>MAX_SCAN_AMOUNT||known.has(amountKey(value))) continue;
+      known.add(amountKey(value)); result.push(value);
+    }
+    return result;
+  }
+
+  async function mapLimit(items,limit,worker) {
+    const results=new Array(items.length); let cursor=0;
+    async function run() {
+      while(true) {
+        ensureScanBudget();
+        const i=cursor++; if(i>=items.length) return;
+        results[i]=await worker(items[i],i);
+      }
+    }
+    await Promise.all(Array.from({length:Math.min(limit,items.length)},run));
+    return results;
+  }
+
+  async function mapLimitBestEffort(items,limit,worker,stopAtMs=activeScanDeadlineAt||Number.POSITIVE_INFINITY) {
+    const results=new Array(items.length); let cursor=0,stopped=false;
+    async function run() {
+      while(!stopped) {
+        if(Date.now()>=stopAtMs || (activeScanDeadlineAt&&scanRemainingMs()<=0)){stopped=true;return;}
+        const i=cursor++; if(i>=items.length) return;
+        try { results[i]=await worker(items[i],i); }
+        catch(e) { if(isDeadlineError(e)){stopped=true;return;} throw e; }
+      }
+    }
+    await Promise.all(Array.from({length:Math.min(limit,items.length)},run));
+    return results.filter(v=>v!==undefined);
+  }
+
+  function selectFastAmounts(amounts,maxCount=FAST_COARSE_AMOUNTS) {
+    const sorted=[...new Set(amounts.map(String))].map(BigInt).sort((a,b)=>a===b?0:(a>b?1:-1));
+    if(sorted.length<=maxCount) return sorted;
+    const selected=[];
+    for(let i=0;i<maxCount;i++) {
+      const index=Math.round(i*(sorted.length-1)/(maxCount-1));
+      const value=sorted[index]; if(!selected.some(v=>v===value)) selected.push(value);
+    }
+    return selected;
+  }
+
+  function roughNetworkCostUSDC(gasUnits,gasPrice,scanL1Wei,ethPrice) {
+    return (gasUnits*gasPrice+scanL1Wei)*ethPrice/10n**18n;
+  }
+
+  function marketLossThreshold(amount) {
+    const proportional=ceilDiv(amount*BigInt(MARKET_PRUNE_MAX_LOSS_BPS),10000n);
+    return proportional>MARKET_PRUNE_MAX_LOSS_USDC?proportional:MARKET_PRUNE_MAX_LOSS_USDC;
+  }
+
+  function shouldPruneMarketLoss(amount,returned) {
+    return returned<amount&&amount-returned>marketLossThreshold(amount);
+  }
+
+  function mergeTemplatesByTarget(map,key,templates) {
+    const current=map.get(key)||[],seen=new Set(current.map(routeTemplateKey));
+    for(const template of templates) {
+      const normalized={target:template.target,firstOption:template.firstOption,secondOption:template.secondOption,roughNet:template.roughNet||0n};
+      const routeKey=routeTemplateKey(normalized);
+      if(seen.has(routeKey)) continue;
+      seen.add(routeKey); current.push(normalized);
+    }
+    current.sort((a,b)=>a.roughNet===b.roughNet?0:(a.roughNet>b.roughNet?-1:1));
+    map.set(key,current.slice(0,DISCOVERY_TEMPLATES));
+  }
+
+  async function discoverTemplatesForTarget(cfg,p,config,target,probeAmount,blockTag,reference,gasPrice,scanL1Wei,stopAtMs) {
+    const options=fastVenueOptions(target,config.slipSpacings);
+    const rawFirstQuotes=(await mapLimitBestEffort(options,TARGET_QUOTE_CONCURRENCY,async option=>{
+      const q=await quoteVenue(cfg,p,option,cfg.usdc,target.address,probeAmount,blockTag);
+      return q?{option,q}:null;
+    },stopAtMs)).filter(Boolean);
+    const firstQuotes=config.divineMode
+      ? selectDiverseFirstQuotes(rawFirstQuotes,FAST_DISCOVERY_BUYS)
+      : selectDiverseFirstQuotes(rawFirstQuotes,3);
+    const pairs=[];
+    for(const first of firstQuotes) for(const secondOption of options) {
+      if(first.option.venue===secondOption.venue&&optionKey(first.option)===optionKey(secondOption)) continue;
+      pairs.push({first,secondOption});
+    }
+    const candidates=(await mapLimitBestEffort(pairs,TARGET_QUOTE_CONCURRENCY,async({first,secondOption})=>{
+      const second=await quoteVenue(cfg,p,secondOption,target.address,cfg.usdc,first.q.out,blockTag);
+      if(!second) return null;
+      if(shouldPruneMarketLoss(probeAmount,second.out)) {
+        marketPrunedCount++;
+        noteQuoteDiagnostic(secondOption.venue,"market_pruned",{tokenIn:target.address,tokenOut:cfg.usdc,parameter:optionKey(secondOption),blockTag,error:"perda de mercado acima do limite de poda"});
+        return null;
+      }
+      const gasUnits=FLASH_BASE_GAS+(first.q.gas||FALLBACK_SWAP_GAS[first.option.venue])+(second.gas||FALLBACK_SWAP_GAS[secondOption.venue]);
+      const roughNet=second.out-probeAmount-roughNetworkCostUSDC(gasUnits,gasPrice,scanL1Wei,reference.price);
+      return {target,firstOption:first.option,secondOption,roughNet,firstQuote:first.q,secondQuote:second,probeAmount};
+    },stopAtMs)).filter(Boolean).sort((a,b)=>a.roughNet===b.roughNet?0:(a.roughNet>b.roughNet?-1:1));
+
+    const selected=[]; const seen=new Set();
+    for(const c of candidates) {
+      const key=optionKey(c.firstOption)+">"+optionKey(c.secondOption);
+      if(seen.has(key)) continue;
+      seen.add(key); selected.push(c);
+      if(selected.length>=(config.divineMode?DISCOVERY_TEMPLATES:3)) break;
+    }
+    return selected;
+  }
+
+  async function buildRowFromQuotes(cfg,p,config,template,amount,displayBlock,premium,reference,gasPrice,scanL1Wei,operatorCache,first,second,stateTag,origin='revalidada') {
+    const {target,firstOption,secondOption}=template;
+    if(!first?.out||!second?.out) return null;
+    const minTarget=bpsDown(first.out,config.slippage);
+    const minUsdc=bpsDown(second.out,config.slippage);
+    const prem=ceilDiv(amount*premium,10000n);
+    const gasUnits=FLASH_BASE_GAS+(first.gas||FALLBACK_SWAP_GAS[firstOption.venue])+(second.gas||FALLBACK_SWAP_GAS[secondOption.venue]);
+    const gas=await feeEstimateUSDC(cfg,p,gasUnits,SCAN_TX_SIZE,reference.price,gasPrice,scanL1Wei,operatorCache);
+    const sameVenue=firstOption.venue===secondOption.venue;
+    const label=`${VENUE_NAMES[firstOption.venue]} → ${target.symbol} → ${VENUE_NAMES[secondOption.venue]}${sameVenue?' (pools distintos)':''}`;
+    return {
+      networkKey:'base',network:'Base',amount,target:target.address,targetSymbol:target.symbol,
+      buyVenue:firstOption.venue,sellVenue:secondOption.venue,
+      buyV3Fee:firstOption.v3Fee||0,sellV3Fee:secondOption.v3Fee||0,
+      buySlipstreamTickSpacing:firstOption.slipstreamTickSpacing||0,
+      sellSlipstreamTickSpacing:secondOption.slipstreamTickSpacing||0,
+      buyAerodromeStable:Boolean(firstOption.aerodromeStable),sellAerodromeStable:Boolean(secondOption.aerodromeStable),
+      firstOption,secondOption,minTargetOut:minTarget,minUsdcOut:minUsdc,premium:prem,
+      gross:second.out-amount,marketNet:second.out-amount-prem-gas.usdc,slippageReserve:second.out-minUsdc,
+      gasUSDC:gas.usdc,gasL1USDC:gas.l1USDC,gasL2USDC:gas.l2USDC,gasOperatorUSDC:gas.operatorUSDC,
+      gasPrice:gas.gasPrice,net:minUsdc-amount-prem-gas.usdc,signalNet:second.out-amount-prem-gas.usdc,
+      block:displayBlock,stateTag,pendingValidated:stateTag===REVALIDATION_BLOCK_TAG,label,quoteOrigin:origin,
+      routeDetail:`${optionText(firstOption)} → ${optionText(secondOption)}`,
+      filters:`${stateTag} • ${config.slippage} bps • ${origin} • staticCall integral obrigatória`
+    };
+  }
+
+  async function evaluateTemplate(cfg,p,config,template,amount,blockTag,displayBlock,premium,reference,gasPrice,scanL1Wei,operatorCache) {
+    const {target,firstOption,secondOption}=template;
+    const first=await quoteVenue(cfg,p,firstOption,cfg.usdc,target.address,amount,blockTag);
+    if(!first) return null;
+    const second=await quoteVenue(cfg,p,secondOption,target.address,cfg.usdc,first.out,blockTag);
+    if(!second) return null;
+    const origin=blockTag===REVALIDATION_BLOCK_TAG?'revalidada pending':'revalidada latest';
+    const row=await buildRowFromQuotes(cfg,p,config,template,amount,displayBlock,premium,reference,gasPrice,scanL1Wei,operatorCache,first,second,blockTag,origin);
+    if(row&&shouldPruneMarketLoss(amount,second.out)) {
+      row.marketPruned=true;
+      marketPrunedCount++;
+      noteQuoteDiagnostic(secondOption.venue,'market_pruned',{tokenIn:target.address,tokenOut:cfg.usdc,parameter:optionKey(secondOption),blockTag,error:'rota mantida apenas como diagnóstico; não será ampliada'});
+    }
+    return row;
+  }
+
+  function normalizeHistoricalOption(target,raw) {
+    if(!raw||!Number.isInteger(Number(raw.venue))) return null;
+    const option={
+      venue:Number(raw.venue),
+      v3Fee:Number(raw.v3Fee||0),
+      slipstreamTickSpacing:Number(raw.slipstreamTickSpacing||0),
+      aerodromeStable:Boolean(raw.aerodromeStable)
+    };
+    if(option.venue===VENUE.UNI) {
+      if(!UNI_FEE_TIERS.includes(option.v3Fee)) return null;
+      option.slipstreamTickSpacing=0; option.aerodromeStable=false;
+    } else if(option.venue===VENUE.PANCAKE) {
+      if(!PANCAKE_FEE_TIERS.includes(option.v3Fee)) return null;
+      option.slipstreamTickSpacing=0; option.aerodromeStable=false;
+    } else if(option.venue===VENUE.AERO) {
+      if(option.v3Fee!==0||option.slipstreamTickSpacing!==0||!target.aeroModes.includes(option.aerodromeStable)) return null;
+    } else if(option.venue===VENUE.SLIP) {
+      if(option.v3Fee!==0||!Number.isInteger(option.slipstreamTickSpacing)||option.slipstreamTickSpacing<=0||option.slipstreamTickSpacing>100000) return null;
+      option.aerodromeStable=false;
+    } else return null;
+    return option;
+  }
+
+  function normalizeHistoricalRoute(raw,config) {
+    try {
+      if(!raw||typeof raw!=='object') return null;
+      const target=TARGETS.find(t=>t.address.toLowerCase()===String(raw.target||'').toLowerCase());
+      if(!target||!config.targets.some(t=>t.key===target.key)) return null;
+      const amount=BigInt(raw.amount);
+      if(amount<MIN_SCAN_AMOUNT||amount>MAX_SCAN_AMOUNT||!config.amounts.some(v=>v===amount)) return null;
+      const signalNet=BigInt(raw.signalNet||0);
+      const protectedNet=BigInt(raw.protectedNet??raw.signalNet??0);
+      if(signalNet<=0n||protectedNet<=0n) return null;
+      if(raw.stateTag&&raw.stateTag!==REVALIDATION_BLOCK_TAG) return null;
+      const firstOption=normalizeHistoricalOption(target,raw.firstOption);
+      const secondOption=normalizeHistoricalOption(target,raw.secondOption);
+      if(!firstOption||!secondOption||optionKey(firstOption)===optionKey(secondOption)) return null;
+      return {
+        template:{target,firstOption,secondOption,roughNet:signalNet,priority:true,historical:true},
+        amount,sourceKey:String(raw.sourceKey||'')
+      };
+    } catch(_) { return null; }
+  }
+
+  function loadHistoricalPriority(config) {
+    for(const key of [STORAGE_KEY,...LEGACY_STORAGE_KEYS]) {
+      try {
+        const raw=JSON.parse(localStorage.getItem(key+":bestRoute")||"null");
+        const normalized=normalizeHistoricalRoute(raw,config);
+        if(normalized) { normalized.sourceKey=key; return normalized; }
+      } catch(_) {}
+    }
+    return null;
+  }
+
+  function closestPriorityAmount(amounts,preferred=ethers.parseUnits('250',6)) {
+    return amounts.reduce((best,value)=>{
+      const bestDistance=best>preferred?best-preferred:preferred-best;
+      const valueDistance=value>preferred?value-preferred:preferred-value;
+      return valueDistance<bestDistance?value:best;
+    },amounts[0]);
+  }
+
+  function buildPriorityJobs(config,amounts,historical=loadHistoricalPriority(config)) {
+    const jobs=[],seen=new Set();
+    const add=(template,amount,source='preset')=>{
+      const key=routeTemplateKey(template)+':'+amount.toString();
+      if(seen.has(key)) return;
+      seen.add(key); jobs.push({template,amount,source});
+    };
+    if(historical&&amounts.some(v=>v===historical.amount)) add(historical.template,historical.amount,'historical');
+    const orderedTargets=[...config.targets].sort((a,b)=>a.key==='weth'?-1:b.key==='weth'?1:0);
+    for(const target of orderedTargets) {
+      const templates=priorityTemplatesForTarget(target,config.slipSpacings);
+      const probe=closestPriorityAmount(amounts);
+      for(const template of templates) add(template,probe);
+    }
+    return {jobs,historicalUsed:Boolean(jobs[0]?.source==='historical'),historicalSource:historical?.sourceKey||null};
+  }
+
+  async function evaluatePriorityPhase(cfg,p,config,amounts,blockTag,displayBlock,premium,reference,gasPrice,scanL1Wei,operatorCache,stopAtMs) {
+    const priority=buildPriorityJobs(config,amounts);
+    config.historicalPriorityUsed=priority.historicalUsed;
+    config.historicalPrioritySource=priority.historicalSource;
+    const rows=await mapLimitBestEffort(priority.jobs,QUOTE_CONCURRENCY,async({template,amount})=>{
+      const row=await evaluateTemplate(cfg,p,config,template,amount,blockTag,displayBlock,premium,reference,gasPrice,scanL1Wei,operatorCache);
+      if(row) scanPartialRows.push(row);
+      return row;
+    },stopAtMs);
+    return rows.filter(Boolean);
+  }
+
+  async function evaluateTemplatesForAmounts(cfg,p,config,templatesByTarget,amounts,blockTag,displayBlock,premium,reference,gasPrice,scanL1Wei,operatorCache,stopAtMs=activeScanDeadlineAt||Number.POSITIVE_INFINITY) {
+    const jobs=[];
+    for(const templates of templatesByTarget.values()) for(const template of templates) for(const amount of amounts) jobs.push({template,amount});
+    const rows=await mapLimitBestEffort(jobs,QUOTE_CONCURRENCY,async({template,amount})=>{
+      const row=await evaluateTemplate(cfg,p,config,template,amount,blockTag,displayBlock,premium,reference,gasPrice,scanL1Wei,operatorCache);
+      if(row) scanPartialRows.push(row);
+      return row;
+    },stopAtMs);
+    return rows.filter(Boolean);
+  }
+
+  function templateFromRow(row) {
+    const target=TARGETS.find(t=>t.address.toLowerCase()===row.target.toLowerCase());
+    if(!target) throw new Error("Ativo da rota não é suportado pela V8.");
+    return {target,firstOption:row.firstOption,secondOption:row.secondOption,roughNet:row.signalNet};
+  }
+
+  function serializeRow(r) {
+    return {
+      amountUSDC:fmtUSDC(r.amount,6),target:r.targetSymbol,targetAddress:r.target,
+      route:r.label,routeDetail:r.routeDetail,buyVenue:r.buyVenue,sellVenue:r.sellVenue,
+      buyV3Fee:r.buyV3Fee,sellV3Fee:r.sellV3Fee,
+      buySlipstreamTickSpacing:r.buySlipstreamTickSpacing,sellSlipstreamTickSpacing:r.sellSlipstreamTickSpacing,
+      buyAerodromePool:r.buyAerodromeStable?"stable":"volatile",
+      sellAerodromePool:r.sellAerodromeStable?"stable":"volatile",
+      minReturnUSDC:fmtUSDC(r.minUsdcOut,6),
+      grossUSDC:fmtUSDC(r.gross,6),marketNetUSDC:fmtUSDC(r.marketNet,6),
+      slippageReserveUSDC:fmtUSDC(r.slippageReserve,6),premiumUSDC:fmtUSDC(r.premium,6),
+      gasL2USDC:fmtUSDC(r.gasL2USDC,6),gasL1USDC:fmtUSDC(r.gasL1USDC,6),
+      gasOperatorUSDC:fmtUSDC(r.gasOperatorUSDC,6),currentQuoteNetUSDC:fmtUSDC(r.signalNet,6),
+      protectedWorstCaseUSDC:fmtUSDC(r.net,6),block:r.block,stateTag:r.stateTag,
+      pendingValidated:Boolean(r.pendingValidated),marketPruned:Boolean(r.marketPruned),quoteOrigin:r.quoteOrigin||"revalidada"
+    };
+  }
+
+  function routeKeyForRefine(row,amount) {
+    return [row.target,optionKey(row.firstOption),optionKey(row.secondOption),amount].join(":");
+  }
+
+  async function scanNetwork(cfg,config,round,onlyAmount=null) {
+    const p=await workingProvider(cfg);
+    await verifyReadContracts(cfg,p);
+    const sealedBlock=await retryRpc('bloco selado',()=>p.getBlockNumber(),2);
+    const discoveryTag=config.routeTemplate?REVALIDATION_BLOCK_TAG:DISCOVERY_BLOCK_TAG;
+    $('scanPhase').textContent=config.routeTemplate
+      ? 'Revalidação direta no pending sobre o bloco '+sealedBlock
+      : 'Descoberta latest sobre o bloco '+sealedBlock;
+    const premium=0n;
+    let slipSpacings=SLIP_TICK_SPACINGS;
+    try {
+      const raw=await retryRpc('tick spacings',()=>new ethers.Contract(cfg.slipFactory,SLIP_FACTORY_ABI,p).tickSpacings({blockTag:discoveryTag}),2);
+      const normalized=[...new Set(raw.map(Number).filter(v=>Number.isInteger(v)&&v>0&&v<=100000))].sort((a,b)=>a-b);
+      if(normalized.length) slipSpacings=normalized.slice(0,5);
+    } catch(e) { if(isDeadlineError(e)) throw e; }
+    config={...config,slipSpacings};
+    const morphoLiquidity=await retryRpc('liquidez Morpho',()=>new ethers.Contract(cfg.usdc,ERC20_ABI,p).balanceOf(cfg.morpho,{blockTag:discoveryTag}),2);
+    const reference=await ethPriceUSDC(cfg,p,discoveryTag,slipSpacings);
+    const fd=await retryRpc('feeData',()=>p.getFeeData(),2);
+    const displayedGas=fd.gasPrice||fd.maxFeePerGas||0n;
+    let scanL1Wei=0n;
+    try { scanL1Wei=await retryRpc('taxa L1 scan',()=>new ethers.Contract(cfg.gasOracle,GAS_ORACLE_ABI,p).getL1FeeUpperBound(SCAN_TX_SIZE,{blockTag:REVALIDATION_BLOCK_TAG}),2); }
+    catch(e) { if(isDeadlineError(e)) throw e; }
+    const operatorCache=new Map();
+    $('oraclePrice').textContent=fmtUSDC(reference.price,2)+' USDC';
+    $('gasPrice').textContent=fmtGwei(displayedGas)+' gwei';
+    $('aeroLiquidity').textContent=reference.aeroOk?'clássico ativo • pool direto':'sem pool clássico WETH/USDC';
+    $('uniLiquidity').textContent=reference.uniCount+' fee tier(s)';
+    $('slipLiquidity').textContent=reference.slipCount+' spacing(s)';
+    if($('pancakeLiquidity')) $('pancakeLiquidity').textContent=reference.pancakeCount+' fee tier(s)';
+    if($('flashblocksState')) $('flashblocksState').textContent=config.routeTemplate?'pending direto':'latest → pending final';
+
+    const requestedAmounts=onlyAmount?[onlyAmount]:config.amounts;
+    const eligibleAmounts=requestedAmounts.filter(v=>v<=morphoLiquidity);
+    const coarseAmounts=onlyAmount?eligibleAmounts:selectFastAmounts(eligibleAmounts);
+    if(!coarseAmounts.length) throw new Error('O Morpho não tem USDC suficiente para os valores escolhidos.');
+
+    const templatesByTarget=new Map();
+    let rows=[],priorityRows=[],timedOut=false,pendingRows=[],revalidationIncomplete=false;
+    const discoveryStopAt=activeScanDeadlineAt?activeScanDeadlineAt-FINAL_REFINE_RESERVE_MS:Number.POSITIVE_INFINITY;
+
+    if(config.routeTemplate) {
+      const t=templateFromRow(config.routeTemplate);
+      templatesByTarget.set(t.target.key,[t]);
+      $('scanPhase').textContent='Revalidando a rota no pending';
+      rows=await evaluateTemplatesForAmounts(cfg,p,config,templatesByTarget,coarseAmounts,REVALIDATION_BLOCK_TAG,sealedBlock,premium,reference,displayedGas,scanL1Wei,operatorCache);
+      pendingRows=rows.filter(r=>r?.pendingValidated);
+    } else {
+      const priorityStopAt=Math.min(discoveryStopAt,Date.now()+PRIORITY_PHASE_MS);
+      const historicalPreview=loadHistoricalPriority(config);
+      $('scanPhase').textContent=historicalPreview
+        ? 'Fase 1/4 • histórico positivo + sondas prioritárias em latest'
+        : 'Fase 1/4 • sondas prioritárias em latest';
+      priorityRows=await evaluatePriorityPhase(cfg,p,config,eligibleAmounts,DISCOVERY_BLOCK_TAG,sealedBlock,premium,reference,displayedGas,scanL1Wei,operatorCache,priorityStopAt);
+      rows=rows.concat(priorityRows);
+      for(const row of priorityRows) {
+        if(row.marketPruned||row.gross<=0n) continue;
+        const target=TARGETS.find(t=>t.address.toLowerCase()===row.target.toLowerCase());
+        if(target) mergeTemplatesByTarget(templatesByTarget,target.key,[templateFromRow(row)]);
+      }
+
+      const preferred=ethers.parseUnits('250',6);
+      const probeAmount=coarseAmounts.reduce((best,v)=>{
+        const db=best>preferred?best-preferred:preferred-best;
+        const dv=v>preferred?v-preferred:preferred-v;
+        return dv<db?v:best;
+      },coarseAmounts[0]);
+
+      if(Date.now()<discoveryStopAt-10_000) {
+        $('scanPhase').textContent=`Fase 2/4 • descoberta diversificada em ${fmtUSDC(probeAmount,2)} USDC no latest`;
+        const discovered=await mapLimitBestEffort(config.targets,TARGET_CONCURRENCY,async target=>[
+          target.key,
+          await discoverTemplatesForTarget(cfg,p,config,target,probeAmount,DISCOVERY_BLOCK_TAG,reference,displayedGas,scanL1Wei,discoveryStopAt)
+        ],discoveryStopAt);
+        const rescuedRows=[];
+        for(const [key,candidates] of discovered) {
+          if(!candidates.length) continue;
+          mergeTemplatesByTarget(templatesByTarget,key,candidates);
+          for(const c of candidates) {
+            if(Date.now()>=discoveryStopAt) break;
+            try {
+              const row=await buildRowFromQuotes(cfg,p,config,c,probeAmount,sealedBlock,premium,reference,displayedGas,scanL1Wei,operatorCache,c.firstQuote,c.secondQuote,DISCOVERY_BLOCK_TAG,'descoberta latest reutilizada');
+              if(row) { rescuedRows.push(row); scanPartialRows.push(row); }
+            } catch(e) { if(isDeadlineError(e)) break; }
+          }
+        }
+        rows=rows.concat(rescuedRows);
+        if($('completeQuoteCount')) $('completeQuoteCount').textContent=String(rows.length);
+      }
+
+      if(templatesByTarget.size&&Date.now()<discoveryStopAt-5_000) {
+        $('scanPhase').textContent='Fase 2/4 • avaliando valores apenas das rotas não podadas';
+        const broadRows=await evaluateTemplatesForAmounts(cfg,p,config,templatesByTarget,coarseAmounts,DISCOVERY_BLOCK_TAG,sealedBlock,premium,reference,displayedGas,scanL1Wei,operatorCache,discoveryStopAt);
+        rows=rows.concat(broadRows);
+        if($('completeQuoteCount')) $('completeQuoteCount').textContent=String(rows.length);
+      }
+
+      if(!onlyAmount&&config.adaptiveRefine&&rows.length&&Date.now()<discoveryStopAt-12_000) {
+        rows.sort((a,b)=>a.signalNet===b.signalNet?0:(a.signalNet>b.signalNet?-1:1));
+        const bestRoutes=[],seenRoutes=new Set();
+        for(const row of rows) {
+          if(row.marketPruned||row.gross<=0n) continue;
+          const routeKey=[row.target,optionKey(row.firstOption),optionKey(row.secondOption)].join(':');
+          if(seenRoutes.has(routeKey)) continue;
+          seenRoutes.add(routeKey); bestRoutes.push(row);
+          if(bestRoutes.length===FAST_REFINE_ROUTES) break;
+        }
+        const known=new Set(rows.map(r=>routeKeyForRefine(r,r.amount))),refineJobs=[];
+        for(const row of bestRoutes) for(const factor of REFINE_BPS) {
+          let value=row.amount*factor/10000n;
+          value=value/250_000n*250_000n;
+          const key=routeKeyForRefine(row,value);
+          if(value<MIN_SCAN_AMOUNT||value>MAX_SCAN_AMOUNT||value>morphoLiquidity||known.has(key)) continue;
+          known.add(key); refineJobs.push({template:templateFromRow(row),amount:value});
+        }
+        if(refineJobs.length) {
+          $('scanPhase').textContent=`Fase 3/4 • refino de ${bestRoutes.length} rotas no latest`;
+          const refined=await mapLimitBestEffort(refineJobs,QUOTE_CONCURRENCY,async({template,amount})=>{
+            const row=await evaluateTemplate(cfg,p,config,template,amount,DISCOVERY_BLOCK_TAG,sealedBlock,premium,reference,displayedGas,scanL1Wei,operatorCache);
+            if(row) scanPartialRows.push(row);
+            return row;
+          },discoveryStopAt);
+          rows=rows.concat(refined.filter(Boolean));
+        }
+      }
+
+      const discoveryDedup=new Map();
+      for(const row of rows) {
+        const key=[row.target,row.amount,optionKey(row.firstOption),optionKey(row.secondOption)].join(':');
+        const old=discoveryDedup.get(key);
+        if(!old||row.signalNet>old.signalNet) discoveryDedup.set(key,row);
+      }
+      rows=[...discoveryDedup.values()].sort((a,b)=>a.signalNet===b.signalNet?0:(a.signalNet>b.signalNet?-1:1));
+
+      const candidates=[],seen=new Set();
+      for(const row of rows) {
+        if(row.marketPruned||row.gross<=0n) continue;
+        const key=routeKeyForRefine(row,row.amount);
+        if(seen.has(key)) continue;
+        seen.add(key); candidates.push(row);
+        if(candidates.length>=FINAL_REVALIDATION_ROUTES) break;
+      }
+      if(candidates.length&&scanRemainingMs()>3_000) {
+        $('scanPhase').textContent=`Fase 4/4 • revalidando ${candidates.length} candidatas no pending`;
+        pendingRows=(await mapLimitBestEffort(candidates,FINAL_REVALIDATION_CONCURRENCY,async candidate=>{
+          const row=await evaluateTemplate(cfg,p,config,templateFromRow(candidate),candidate.amount,REVALIDATION_BLOCK_TAG,sealedBlock,premium,reference,displayedGas,scanL1Wei,operatorCache);
+          if(row) scanPartialRows.push(row);
+          return row;
+        },activeScanDeadlineAt?activeScanDeadlineAt-1_000:Number.POSITIVE_INFINITY)).filter(Boolean);
+        revalidationIncomplete=pendingRows.length<candidates.length;
+      }
+      if(pendingRows.length) rows=pendingRows;
+      else revalidationIncomplete=candidates.length>0;
+    }
+
+    if(activeScanDeadlineAt&&scanRemainingMs()<=0) timedOut=true;
+    if(!rows.length&&scanPartialRows.length) rows=[...scanPartialRows];
+    const dedup=new Map();
+    for(const r of rows) {
+      const key=[r.target,r.amount,optionKey(r.firstOption),optionKey(r.secondOption)].join(':');
+      const old=dedup.get(key); if(!old||r.signalNet>old.signalNet) dedup.set(key,r);
+    }
+    rows=[...dedup.values()].sort((a,b)=>a.signalNet===b.signalNet?0:(a.signalNet>b.signalNet?-1:1));
+    if($('completeQuoteCount')) $('completeQuoteCount').textContent=String(rows.length);
+
+    const safeHistorical=rows.find(r=>r.stateTag===REVALIDATION_BLOCK_TAG&&r.net>0n&&r.signalNet>0n);
+    if(safeHistorical) {
+      try {
+        localStorage.setItem(STORAGE_KEY+':bestRoute',JSON.stringify({
+          target:safeHistorical.target,targetSymbol:safeHistorical.targetSymbol,amount:safeHistorical.amount.toString(),
+          firstOption:safeHistorical.firstOption,secondOption:safeHistorical.secondOption,
+          signalNet:safeHistorical.signalNet.toString(),protectedNet:safeHistorical.net.toString(),stateTag:safeHistorical.stateTag
+        }));
+      } catch(_) {}
+    }
+
+    const returnedTag=rows[0]?.stateTag||DISCOVERY_BLOCK_TAG;
+    $('scanPhase').textContent=timedOut
+      ? 'Limite de 4min30s atingido • exibindo melhor resultado disponível'
+      : (returnedTag===REVALIDATION_BLOCK_TAG
+        ? 'Concluído • melhores candidatas revalidadas no pending • bloco '+sealedBlock
+        : 'Concluído • somente descoberta latest; nenhuma linha pending utilizável');
+
+    lastScanSnapshot={
+      version:'V8.4.4 RPC CIRCUIT + QUOTE DEDUP + LATEST→PENDING — LIMITE 4M30',timestamp:new Date().toISOString(),sealedBlock,
+      stateTag:returnedTag,discoveryStateTag:DISCOVERY_BLOCK_TAG,revalidationStateTag:REVALIDATION_BLOCK_TAG,timedOut,revalidationIncomplete,
+      fundingProvider:'Morpho Blue',flashLoanFeeBps:'0',slipstreamTickSpacings:config.slipSpacings,
+      morphoLiquidityUSDC:fmtUSDC(morphoLiquidity,6),referencePriceUSDC:fmtUSDC(reference.price,6),
+      gasGwei:fmtGwei(displayedGas),adaptiveRefine:config.adaptiveRefine,divineMode:config.divineMode,
+      historicalPriorityUsed:Boolean(config.historicalPriorityUsed),historicalPrioritySource:config.historicalPrioritySource||null,
+      priorityRows:priorityRows.length,discoveredTemplates:[...templatesByTarget.values()].reduce((n,x)=>n+x.length,0),
+      pendingRevalidatedRows:pendingRows.length,completeRows:rows.length,quoteCacheHits,quoteCacheMisses,rpcFallbackCount,marketPrunedCount,
+      rpcHealth:Object.fromEntries([...rpcHealth].map(([url,h])=>[url,{failures:h.failures,openUntil:h.openUntil,lastLatencyMs:h.lastLatencyMs,lastError:h.lastError}])),
+      quoteDiagnostics:diagnosticSummaryObject(),quoteDiagnosticEvents,rows:rows.slice(0,60).map(serializeRow)
+    };
+    $('exportBtn').disabled=false;
+    return rows;
+  }
+
+  function fingerprint(r){return [r.target,r.amount,optionKey(r.firstOption),optionKey(r.secondOption)].join(":");}
+
+  function renderRows(rows) {
+    const body=$("resultBody");body.innerHTML="";
+    for(const r of rows.slice(0,40)) {
+      const tr=document.createElement("tr"),cls=r.signalNet>=0n?"positive":"negative";
+      tr.innerHTML=`<td>${fmtUSDC(r.amount,2)}</td><td>${r.targetSymbol}</td><td>${r.label}</td><td>${r.routeDetail}</td><td>${fmtUSDC(r.gross,6)}</td><td>${fmtUSDC(r.gasUSDC,6)}</td><td>${fmtUSDC(r.slippageReserve,6)}</td><td class="${cls}">${fmtUSDC(r.signalNet,6)}</td><td class="${r.net>=0n?"positive":"negative"}">${fmtUSDC(r.net,6)}</td>`;
+      body.appendChild(tr);
+    }
+    $("resultTable").classList.remove("hidden");
+  }
+
+  function clearExecutionGate(resetConfirmation=true) {
+    confirmedRoute=null; exactPlan=null; exactContext=null; exactValidUntil=0;
+    $("connectBtn").disabled=!$("riskAck").checked;
+    $("exactBtn").disabled=true; $("executeBtn").disabled=true;
+    if(provider&&signer) {
+      $("compileBtn").disabled=false;
+      $("loadExecutorBtn").disabled=false;
+      $("deployBtn").disabled=!compiledBytecode;
+      show("baseGate","Carteira preparada. Aguardando candidata positiva para liberar a simulação integral.","warn");
+    } else {
+      $("compileBtn").disabled=true; $("deployBtn").disabled=true; $("loadExecutorBtn").disabled=true;
+      show("baseGate","Você pode preparar carteira e executor antes de surgir uma rota positiva.");
+    }
+    if(resetConfirmation){lastPositiveFingerprint=null;lastPositiveBlock=null;positiveCount=0;$("confirmations").textContent="0/1";}
+  }
+
+  function updateConnectGate() { $("connectBtn").disabled=!$("riskAck").checked; }
+  $("riskAck").addEventListener("change",updateConnectGate);
+
+  async function runScan(source='manual') {
+    if(monitorBusy) return;
+    monitorBusy=true;
+    startScanBudgetClock();
+    try {
+      show('scanStatus','Preparando o scanner e carregando a biblioteca Ethereum…','warn');
+      await ensureEthers();
+      const config=inputs();
+      show('scanStatus',source==='auto'?'Monitor: V8.4.4 iniciado — máximo 4min30s…':'V8.4.4 iniciado — máximo 4min30s…','warn');
+      let rows;
+      try {
+        rows=await scanNetwork(NETWORKS.base,config,source);
+      } catch(firstError) {
+        if(!isTransientRpcError(firstError)) throw firstError;
+        if(scanRemainingMs()<35_000) throw firstError;
+        show('scanStatus','RPC incompleto. Abrindo circuito e alternando endpoint dentro do mesmo limite…','warn');
+        await workingProvider(NETWORKS.base,true);
+        rows=await scanNetwork(NETWORKS.base,config,source+'-retry');
+      }
+      if(!rows.length) {
+        const summary=diagnosticSummaryObject();
+        const missing=Object.entries(summary).filter(([k])=>k.endsWith(':pool_missing')).reduce((n,[,v])=>n+v,0);
+        const failed=Object.entries(summary).filter(([k])=>!k.endsWith(':ok')&&!k.endsWith(':pool_missing')&&!k.endsWith(':market_pruned')).reduce((n,[,v])=>n+v,0);
+        throw new Error(`Nenhuma rota completa nesta leitura. Diagnóstico: ${missing} pools inexistentes, ${marketPrunedCount} rotas podadas e ${failed} falhas/reverts.`);
+      }
+      renderRows(rows);
+      const best=rows[0];
+      const pendingValidated=best.stateTag===REVALIDATION_BLOCK_TAG&&best.pendingValidated!==false;
+      const currentOk=best.signalNet>=config.minProfit;
+      const protectedOk=best.net>=config.minProfit;
+      const eligible=pendingValidated&&currentOk&&protectedOk;
+      $('bestRoute').textContent=`${best.label} • ${fmtUSDC(best.amount,2)} USDC • ${best.routeDetail}`;
+      $('bestNet').textContent=fmtUSDC(best.signalNet,6)+' USDC';
+      $('bestNet').className=eligible?'positive':'negative';
+      $('bestBlock').textContent=best.block;
+      $('lastScan').textContent=new Date().toLocaleTimeString('pt-BR');
+      $('l2Fee').textContent=fmtUSDC(best.gasL2USDC,6)+' USDC';
+      $('l1Fee').textContent=fmtUSDC(best.gasL1USDC,6)+' USDC';
+      $('operatorFee').textContent=fmtUSDC(best.gasOperatorUSDC,6)+' USDC';
+      $('grossSpread').textContent=fmtUSDC(best.gross,6)+' USDC';
+      $('flashPremium').textContent='0 USDC';
+      $('safetyReserve').textContent=fmtUSDC(best.slippageReserve,6)+' USDC';
+      $('marketNet').textContent=fmtUSDC(best.marketNet,6)+' USDC';
+      $('marketNet').className=best.marketNet>=0n?'positive':'negative';
+
+      if(!eligible) {
+        clearExecutionGate(true);
+        const partialNote=lastScanSnapshot?.timedOut
+          ? '\nConsulta encerrada automaticamente no limite de 4min30s; este é o melhor resultado disponível.'
+          : '';
+        let reason;
+        if(!pendingValidated) reason='A melhor linha veio apenas da descoberta latest ou não concluiu a revalidação pending.';
+        else if(!currentOk) reason=best.signalNet>=0n
+          ? `A cotação atual está positiva em ${fmtUSDC(best.signalNet,6)} USDC, mas abaixo do mínimo de ${fmtUSDC(config.minProfit,6)} USDC.`
+          : `O mercado está ${fmtUSDC(-best.signalNet,6)} USDC abaixo do equilíbrio após as taxas.`;
+        else reason=`A reserva de cotação reduz o pior caso para ${fmtUSDC(best.net,6)} USDC, abaixo do mínimo protegido de ${fmtUSDC(config.minProfit,6)} USDC.`;
+        const almost=pendingValidated&&best.signalNet>=-20000n;
+        show('scanStatus',`${almost?'QUASE NO EQUILÍBRIO — AINDA NÃO EXECUTÁVEL':'SEM ROTA ELEGÍVEL'}
+Melhor rota: ${best.label}
+Parâmetros: ${best.routeDetail}
+Estado da linha: ${best.stateTag}
+Líquido pela cotação atual: ${fmtUSDC(best.signalNet,6)} USDC
+Pior caso protegido: ${fmtUSDC(best.net,6)} USDC
+${reason}${partialNote}
+Nada será executado.`,almost?'warn':'bad');
+        return;
+      }
+
+      confirmedRoute=best;
+      lastPositiveFingerprint=fingerprint(best); lastPositiveBlock=best.block; positiveCount=1;
+      $('confirmations').textContent='1/1';
+      show('scanStatus',`CANDIDATA VERDE V8.4.4 — VALIDAÇÃO EXATA OBRIGATÓRIA
+${best.label}
+Ativo: ${best.targetSymbol}
+Revalidada no estado: ${best.stateTag}
+Líquido pela cotação atual: ${fmtUSDC(best.signalNet,6)} USDC
+Pior caso protegido: ${fmtUSDC(best.net,6)} USDC
+O scanner já confirmou currentQuoteNetUSDC e protectedWorstCaseUSDC acima do mínimo; a simulação integral decide se executa.`,'ok');
+      show('baseGate',provider?'Candidata pending protegida encontrada. Executor preparado pode simular imediatamente.':'Candidata pending protegida encontrada. Conecte a carteira para a simulação integral.','ok');
+      $('exactBtn').disabled=!(executor&&executorBytecodeVerified);
+      updateConnectGate();
+      if(navigator.vibrate) navigator.vibrate([200,100,200]);
+      stopMonitor();
+    } catch(e) {
+      clearExecutionGate(true); show('scanStatus',errText(e),'bad');
+    } finally {stopScanBudgetClock();monitorBusy=false;$('scanBtn').disabled=false;}
+  }
+
+  $('exportBtn').onclick=()=>{
+    try {
+      if(!lastScanSnapshot) throw new Error("Faça uma leitura primeiro.");
+      const blob=new Blob([JSON.stringify(lastScanSnapshot,null,2)],{type:"application/json"});
+      const url=URL.createObjectURL(blob),a=document.createElement("a");
+      a.href=url;a.download=`flashloan-v8-4-4-rpc-circuit-bloco-${lastScanSnapshot.sealedBlock||lastScanSnapshot.block}.json`;a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1500);
+    } catch(e) { show("scanStatus",errText(e),"bad"); }
+  };
+
+  async function acquireWakeLock() {
+    if(!("wakeLock" in navigator)) { $("wakeState").textContent="não suportado"; return; }
+    try {
+      wakeLock=await navigator.wakeLock.request("screen");
+      $("wakeState").textContent="ativa";
+      wakeLock.addEventListener("release",()=>{$("wakeState").textContent="liberada";wakeLock=null;});
+    } catch(_) { $("wakeState").textContent="indisponível"; }
+  }
+
+  async function releaseWakeLock() {
+    try { await wakeLock?.release(); } catch(_) {}
+    wakeLock=null; $("wakeState").textContent="desligada";
+  }
+
+  function updateCountdown() {
+    if(!monitorTimer){$("nextScan").textContent="—";return;}
+    const seconds=Math.max(0,Math.ceil((nextRunAt-Date.now())/1000));$("nextScan").textContent=seconds+" s";
+  }
+
+  function scheduleNext() {
+    const config=inputs(); nextRunAt=Date.now()+config.intervalSeconds*1000;
+    monitorTimer=setTimeout(async()=>{await runScan("auto"); if(monitorTimer!==null&&!confirmedRoute) scheduleNext();},config.intervalSeconds*1000);
+  }
+
+  function startMonitor() {
+    if(monitorTimer) return;
+    inputs(); acquireWakeLock();
+    $("startMonitorBtn").disabled=true;$("stopMonitorBtn").disabled=false;$("scanStatus").classList.add("pulse");
+    runScan("auto").finally(()=>{if(!confirmedRoute&&monitorTimer===null) scheduleNext();});
+    countdownTimer=setInterval(updateCountdown,500);
+  }
+
+  function stopMonitor() {
+    if(monitorTimer){clearTimeout(monitorTimer);monitorTimer=null;}
+    if(countdownTimer){clearInterval(countdownTimer);countdownTimer=null;}
+    releaseWakeLock();
+    $("startMonitorBtn").disabled=false;$("stopMonitorBtn").disabled=true;$("scanStatus").classList.remove("pulse");$("nextScan").textContent="—";
+  }
+
+  $("scanBtn").onclick=()=>{ $("scanBtn").disabled=true; runScan("manual"); };
+  $("startMonitorBtn").onclick=()=>{try{startMonitor();}catch(e){show("scanStatus",errText(e),"bad");}};
+  $("stopMonitorBtn").onclick=stopMonitor;
+  document.addEventListener("visibilitychange",()=>{if(document.hidden&&monitorTimer) stopMonitor();});
+
+  async function switchToBase() {
+    const cfg=NETWORKS.base;
+    const current=await window.ethereum.request({method:"eth_chainId"});
+    if(BigInt(current)===cfg.chainId) return;
+    try { await window.ethereum.request({method:"wallet_switchEthereumChain",params:[{chainId:cfg.chainHex}]}); }
+    catch(e) {
+      if(e?.code!==4902) throw e;
+      await window.ethereum.request({method:"wallet_addEthereumChain",params:[{
+        chainId:cfg.chainHex,chainName:"Base",nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},
+        rpcUrls:[cfg.rpc[0]],blockExplorerUrls:[cfg.explorer]
+      }]});
+    }
+  }
+
+  async function verifyBaseContracts() {
+    const cfg=NETWORKS.base;
+    const entries=[cfg.morpho,cfg.usdc,cfg.weth,cfg.cbeth,cfg.wsteth,cfg.aero,cfg.usdbc,cfg.eurc,cfg.cbbtc,cfg.uniFactory,cfg.uniQuoter,cfg.uniRouter,cfg.altRouter,cfg.altFactory,cfg.slipFactory,cfg.slipQuoter,cfg.slipRouter,cfg.pancakeFactory,cfg.pancakeQuoter,cfg.pancakeRouter];
+    const sizes=await Promise.all(entries.map(a=>codeBytes(provider,a)));
+    if(sizes.some(x=>x===0)) throw new Error("Um contrato Base configurado não tem bytecode.");
+    return sizes.reduce((a,b)=>a+b,0);
+  }
+
+  async function sourceHash(text) {
+    const bytes=new TextEncoder().encode(text);
+    const digest=await crypto.subtle.digest("SHA-256",bytes);
+    return Array.from(new Uint8Array(digest)).map(v=>v.toString(16).padStart(2,"0")).join("");
+  }
+
+  async function loadWebSolc() {
+    if(webSolcPromise) return webSolcPromise;
+    webSolcPromise=(async()=>{
+      let last;
+      for(const url of ["https://esm.sh/web-solc@0.7.0?bundle","https://cdn.jsdelivr.net/npm/web-solc@0.7.0/+esm"]) {
+        try { const m=await import(url); if(typeof m.fetchAndLoadSolc!=="function") throw new Error("Módulo inválido."); return m; }
+        catch(e) { last=e; }
+      }
+      throw last||new Error("Compilador indisponível.");
+    })();
+    try { return await webSolcPromise; } catch(e) { webSolcPromise=null; throw e; }
+  }
+
+  async function compileContract() {
+    const {fetchAndLoadSolc}=await loadWebSolc();
+    const text=$("soliditySource").textContent;
+    const input={language:"Solidity",sources:{"FlashLoanArbitrageBaseV80.sol":{content:text}},settings:{
+      optimizer:{enabled:true,runs:200},evmVersion:"cancun",
+      outputSelection:{"*":{"*":["abi","evm.bytecode.object","evm.deployedBytecode.object"]}}
+    }};
+    let compiler;
+    try {
+      try { compiler=await fetchAndLoadSolc("0.8.24",{fetch:{build:"wasm"}}); }
+      catch(_) { compiler=await fetchAndLoadSolc("0.8.24",{fetch:{build:"emscripten"}}); }
+      const out=await compiler.compile(input);
+      const errors=(out.errors||[]).filter(e=>e.severity==="error");
+      if(errors.length) throw new Error(errors.map(e=>e.formattedMessage||e.message).join("\n\n"));
+      const a=out.contracts?.["FlashLoanArbitrageBaseV80.sol"]?.FlashLoanArbitrageBaseV80;
+      if(!a?.evm?.bytecode?.object) throw new Error("Bytecode não foi gerado.");
+      compiledAbi=a.abi;
+      compiledBytecode="0x"+a.evm.bytecode.object;
+      compiledRuntimeBytecode="0x"+a.evm.deployedBytecode.object;
+      localStorage.setItem(STORAGE_KEY+":compiled",JSON.stringify({
+        abi:compiledAbi,bytecode:compiledBytecode,runtimeBytecode:compiledRuntimeBytecode,hash:await sourceHash(text)
+      }));
+      return {creation:(compiledBytecode.length-2)/2,runtime:(compiledRuntimeBytecode.length-2)/2};
+    } finally { try { compiler?.stopWorker(); } catch(_){} }
+  }
+
+  async function restoreCompiled() {
+    try {
+      const s=JSON.parse(localStorage.getItem(STORAGE_KEY+":compiled")||"null");
+      if(!s||!s.runtimeBytecode||s.hash!==await sourceHash($("soliditySource").textContent)) return false;
+      compiledAbi=s.abi; compiledBytecode=s.bytecode; compiledRuntimeBytecode=s.runtimeBytecode;
+      show("compileStatus","Contrato já preparado neste aparelho. O runtime será comparado antes da execução.","ok");
+      $("deployBtn").disabled=!(provider&&signer);
+      return true;
+    } catch(_) { return false; }
+  }
+
+  async function useExecutor(address) {
+    const raw=String(address??"").trim();
+    if(!/^0x[0-9a-fA-F]{40}$/.test(raw)) throw new Error("Endereço do executor inválido.");
+    // Lowercase first: ethers v6 then recalculates the checksum instead of rejecting
+    // harmless capitalization copied from browsers or explorers.
+    const normalized=ethers.getAddress(raw.toLowerCase());
+    const code=await provider.getCode(normalized);
+    if(code==="0x") throw new Error("O endereço informado não possui bytecode.");
+    const c=new ethers.Contract(normalized,EXECUTOR_ABI,signer);
+    const [owner,chainId,morpho,usdc,weth,cbeth,wsteth,aero,usdbc,eurc,cbbtc,uniRouter,aeroRouter,aeroFactory,slipRouter,pancakeRouter,maxLoan,minFloor,isPaused]=await Promise.all([
+      c.owner(),c.BASE_CHAIN_ID(),c.MORPHO(),c.USDC(),c.WETH(),c.CBETH(),c.WSTETH(),c.AERO(),c.USDBC(),c.EURC(),c.CBBTC(),
+      c.UNISWAP_ROUTER(),c.AERODROME_ROUTER(),c.AERODROME_FACTORY(),c.SLIPSTREAM_ROUTER(),c.PANCAKE_ROUTER(),c.MAX_LOAN_AMOUNT(),c.MIN_PROFIT_FLOOR(),c.paused()
+    ]);
+    const same=(a,b)=>String(a).toLowerCase()===String(b).toLowerCase();
+    if(!same(owner,account)) throw new Error("Executor pertence a outra conta.");
+    if(chainId!==NETWORKS.base.chainId) throw new Error("Executor declara chainId incorreto.");
+    if(!same(morpho,NETWORKS.base.morpho)||!same(usdc,NETWORKS.base.usdc)||!same(weth,NETWORKS.base.weth)||
+       !same(cbeth,NETWORKS.base.cbeth)||!same(wsteth,NETWORKS.base.wsteth)||!same(aero,NETWORKS.base.aero)||!same(usdbc,NETWORKS.base.usdbc)||
+       !same(eurc,NETWORKS.base.eurc)||!same(cbbtc,NETWORKS.base.cbbtc)||
+       !same(uniRouter,NETWORKS.base.uniRouter)||!same(aeroRouter,NETWORKS.base.altRouter)||!same(aeroFactory,NETWORKS.base.altFactory)||!same(slipRouter,NETWORKS.base.slipRouter)||!same(pancakeRouter,NETWORKS.base.pancakeRouter)) {
+      throw new Error("Executor usa endereços diferentes dos contratos Base esperados.");
+    }
+    if(maxLoan!==MAX_SCAN_AMOUNT||minFloor!==10000n) throw new Error("Executor possui limites diferentes da versão revisada.");
+
+    executorBytecodeVerified=Boolean(compiledRuntimeBytecode&&same(code,compiledRuntimeBytecode));
+    executorAddress=normalized; executor=c;
+    localStorage.setItem(STORAGE_KEY+":executor",normalized);
+    $("executorInput").value=normalized;
+    $("withdrawBtn").disabled=!executorBytecodeVerified;
+    $("pauseBtn").disabled=!executorBytecodeVerified||isPaused;
+    $("unpauseBtn").disabled=!executorBytecodeVerified||!isPaused;
+    $("exactBtn").disabled=!(confirmedRoute&&executorBytecodeVerified&&!isPaused);
+    if(executorBytecodeVerified) {
+      show("deployStatus",`EXECUTOR VERIFICADO
+${normalized}
+Runtime idêntico ao contrato preparado neste aparelho.
+${NETWORKS.base.explorer}/address/${normalized}`,"ok");
+    } else {
+      show("deployStatus",`EXECUTOR CARREGADO, MAS NÃO LIBERADO
+${normalized}
+Prepare o contrato neste aparelho para comparar o bytecode antes de simular ou executar.
+${NETWORKS.base.explorer}/address/${normalized}`,"warn");
+    }
+  }
+
+  async function restoreExecutor() {
+    const a=localStorage.getItem(STORAGE_KEY+":executor");
+    if(!a) return;
+    try { await useExecutor(a); } catch(_) { localStorage.removeItem(STORAGE_KEY+":executor"); }
+  }
+
+  $("loadExecutorBtn").onclick=async()=>{
+    try {
+      if(!provider||!signer) throw new Error("Conecte a carteira primeiro.");
+      $("loadExecutorBtn").disabled=true;
+      await useExecutor($("executorInput").value.trim());
+    } catch(e) { show("deployStatus",errText(e),"bad"); }
+    finally { $("loadExecutorBtn").disabled=false; }
+  };
+
+  function routePlan(r,minProfit,seconds=60) {
+    return {amount:r.amount,target:r.target,buyVenue:r.buyVenue,sellVenue:r.sellVenue,
+      buyV3Fee:r.buyV3Fee,sellV3Fee:r.sellV3Fee,
+      buySlipstreamTickSpacing:r.buySlipstreamTickSpacing,sellSlipstreamTickSpacing:r.sellSlipstreamTickSpacing,
+      buyAerodromeStable:r.buyAerodromeStable,sellAerodromeStable:r.sellAerodromeStable,
+      minTargetOut:r.minTargetOut,minUsdcOut:r.minUsdcOut,minProfit,deadline:BigInt(Math.floor(Date.now()/1000)+seconds)};
+  }
+
+  $("connectBtn").onclick=async()=>{
+    try {
+      await ensureEthers();
+      if(!window.ethereum) throw new Error("MetaMask não detectada. Abra no navegador interno da carteira.");
+      show("baseGate","Conectando e verificando contratos Base…","warn");
+      await window.ethereum.request({method:"eth_requestAccounts"}); await switchToBase();
+      provider=new ethers.BrowserProvider(window.ethereum); signer=await provider.getSigner(); account=await signer.getAddress();
+      const net=await provider.getNetwork(); if(net.chainId!==NETWORKS.base.chainId) throw new Error("A rede ativa não é Base.");
+      const bytes=await verifyBaseContracts();
+      premiumBps=0n;
+      $("account").textContent=account; $("network").textContent="Base (8453)";
+      $("ethBalance").textContent=ethers.formatEther(await provider.getBalance(account))+" ETH";
+      $("premiumBps").textContent="Morpho Blue • 0 bps";
+      show("baseGate",`Carteira conectada. Contratos verificados (${bytes} bytes somados).`,"ok");
+      $("compileBtn").disabled=false; $("loadExecutorBtn").disabled=false; await restoreCompiled(); await restoreExecutor();
+    } catch(e) { show("baseGate",errText(e),"bad"); }
+  };
+
+  $("compileBtn").onclick=async()=>{
+    try {
+      $("compileBtn").disabled=true; show("compileStatus","Preparando contrato no navegador…","warn");
+      const s=await compileContract();
+      show("compileStatus",`CONTRATO PREPARADO\nCriação: ${s.creation} bytes\nRuntime: ${s.runtime} bytes\nO runtime implantado será comparado byte a byte.`,"ok");
+      $("deployBtn").disabled=!(provider&&signer);
+      if(executorAddress) await useExecutor(executorAddress);
+    } catch(e) { show("compileStatus",errText(e),"bad"); $("compileBtn").disabled=false; }
+  };
+
+  $("deployBtn").onclick=async()=>{
+    try {
+      if(!compiledAbi||!compiledBytecode) throw new Error("Prepare o contrato primeiro.");
+      $("deployBtn").disabled=true; show("deployStatus","Estimando implantação. Confirme somente rede Base e valor 0 ETH…","warn");
+      const f=new ethers.ContractFactory(compiledAbi,compiledBytecode,signer);
+      const req=await f.getDeployTransaction(); const gas=await signer.estimateGas(req);
+      const tx=await signer.sendTransaction({...req,gasLimit:gas*120n/100n});
+      show("deployStatus",`Implantação enviada:\n${tx.hash}\nAguardando…`,"warn");
+      const receipt=await tx.wait(); if(!receipt.contractAddress) throw new Error("Contrato confirmado sem endereço retornado. Não repita.");
+      await useExecutor(receipt.contractAddress);
+    } catch(e) { show("deployStatus",errText(e),"bad"); $("deployBtn").disabled=false; }
+  };
+
+  async function simulatePlanPending(plan) {
+    const p=await workingProvider(NETWORKS.base);
+    const data=executor.interface.encodeFunctionData("startArbitrage",[plan]);
+    const tx={from:account,to:executorAddress,data};
+
+    // Prefer the Base-native bundle simulator. It evaluates the complete flash
+    // loan against the current pre-confirmed Flashblock and returns gas used.
+    try {
+      const blocks=await withExecutionTimeout("eth_simulateV1",()=>p.send("eth_simulateV1",[{
+        blockStateCalls:[{calls:[tx],stateOverrides:{}}],
+        traceTransfers:true,
+        validation:false
+      },FLASHBLOCK_TAG]),EXECUTION_RPC_TIMEOUT_MS);
+      const call=blocks?.[0]?.calls?.[0];
+      if(!call) throw new Error("eth_simulateV1 não devolveu o resultado da chamada.");
+      if(call.status!=="0x1") throw new Error(call.error||"A simulação Flashblocks reverteu.");
+      const decoded=executor.interface.decodeFunctionResult("startArbitrage",call.returnData||"0x");
+      return {simulatedProfit:decoded[0],gas:BigInt(call.gasUsed),p,data,engine:"eth_simulateV1"};
+    } catch(simulateError) {
+      // Compatible fallback for RPC providers that support pending eth_call but
+      // do not expose the Base-specific simulator.
+      const pendingTx={...tx,blockTag:FLASHBLOCK_TAG};
+      const raw=await withExecutionTimeout("eth_call pending",()=>p.call(pendingTx),EXECUTION_RPC_TIMEOUT_MS);
+      const decoded=executor.interface.decodeFunctionResult("startArbitrage",raw);
+      let gas;
+      try {
+        const estimate=await withExecutionTimeout("eth_estimateGas pending",()=>p.send("eth_estimateGas",[tx,FLASHBLOCK_TAG]),EXECUTION_RPC_TIMEOUT_MS);
+        gas=BigInt(estimate);
+      } catch(_) {
+        gas=await withExecutionTimeout("estimateGas pending",()=>p.estimateGas(pendingTx),EXECUTION_RPC_TIMEOUT_MS);
+      }
+      return {simulatedProfit:decoded[0],gas,p,data,engine:"eth_call pending",simulateError:errText(simulateError)};
+    }
+  }
+
+  async function validateProtectedPlan(fresh,config,reference) {
+    let protectedMin=config.minProfit;
+    let latest=null;
+    for(let attempt=0;attempt<4;attempt++) {
+      const plan=routePlan(fresh,protectedMin,45);
+      const simulation=await simulatePlanPending(plan);
+      const txSize=BigInt((simulation.data.length-2)/2+180);
+      const fees=await feeEstimateUSDC(
+        NETWORKS.base,simulation.p,simulation.gas*130n/100n,txSize,reference.price,
+        null,null,null,true
+      );
+      const requiredMin=config.minProfit+fees.usdc*130n/100n;
+      latest={plan,simulatedProfit:simulation.simulatedProfit,gas:simulation.gas,fees,protectedMin,engine:simulation.engine};
+      if(requiredMin<=protectedMin) return latest;
+      protectedMin=requiredMin;
+    }
+    throw new Error("O custo mudou durante a validação pending. Faça a simulação novamente.");
+  }
+
+  $("exactBtn").onclick=async()=>{
+    try {
+      if(!executor||!confirmedRoute||confirmedRoute.networkKey!=="base") throw new Error("Executor e rota Base confirmada são necessários.");
+      $("exactBtn").disabled=true; $("executeBtn").disabled=true;
+      show("exactStatus","Atualizando preços e simulando a transação inteira…","warn");
+      const config=inputs();
+      quoteResultCache=new Map();
+      const freshRows=await scanNetwork(NETWORKS.base,{...config,adaptiveRefine:false,routeTemplate:confirmedRoute},"exata",confirmedRoute.amount);
+      const fresh=freshRows.find(r=>fingerprint(r)===fingerprint(confirmedRoute));
+      if(!fresh||fresh.stateTag!==REVALIDATION_BLOCK_TAG||fresh.signalNet<config.minProfit||fresh.net<config.minProfit) throw new Error("A rota deixou de ser positiva e protegida no pending. Volte ao monitor.");
+
+      const pendingProvider=await workingProvider(NETWORKS.base);
+      const reference=await ethPriceUSDC(NETWORKS.base,pendingProvider,FLASHBLOCK_TAG);
+      const checked=await validateProtectedPlan(fresh,config,reference);
+      const exactNet=checked.simulatedProfit-checked.fees.usdc;
+      if(exactNet<config.minProfit) throw new Error("A simulação completa ficou abaixo do lucro mínimo: "+fmtUSDC(exactNet,6)+" USDC.");
+
+      exactPlan=checked.plan;
+      exactContext={minProfit:config.minProfit,referencePrice:reference.price};
+      exactValidUntil=Date.now()+6000;
+      show("exactStatus",`VALIDAÇÃO COMPLETA APROVADA\nLucro do contrato antes das taxas de rede: ${fmtUSDC(checked.simulatedProfit,6)} USDC\nGas estimado: ${checked.gas}\nExecução L2: ${fmtUSDC(checked.fees.l2USDC,6)} USDC\nPublicação L1: ${fmtUSDC(checked.fees.l1USDC,6)} USDC\nTaxa do operador: ${fmtUSDC(checked.fees.operatorUSDC,6)} USDC\nLíquido após taxas: ${fmtUSDC(exactNet,6)} USDC\nProteção on-chain mínima: ${fmtUSDC(checked.protectedMin,6)} USDC\nLiberação válida por 6 segundos no estado pending.`,"ok");
+      $("executeBtn").disabled=false;
+      setTimeout(()=>{ if(Date.now()>=exactValidUntil) $("executeBtn").disabled=true; },6500);
+    } catch(e) { exactPlan=null; exactContext=null; exactValidUntil=0; show("exactStatus",errText(e),"bad"); }
+    finally { $("exactBtn").disabled=false; }
+  };
+
+  $("executeBtn").onclick=async()=>{
+    try {
+      if(!executor||!exactPlan||!exactContext||Date.now()>exactValidUntil) throw new Error("A validação expirou. Valide novamente.");
+      $("executeBtn").disabled=true; show("executeStatus","Fazendo a última simulação e recalculando todas as taxas…","warn");
+      const simulation=await simulatePlanPending(exactPlan);
+      const simulatedProfit=simulation.simulatedProfit;
+      const gas=simulation.gas;
+      const txSize=BigInt((simulation.data.length-2)/2+180);
+      const reference=await ethPriceUSDC(NETWORKS.base,simulation.p,FLASHBLOCK_TAG);
+      const fees=await feeEstimateUSDC(
+        NETWORKS.base,simulation.p,gas*130n/100n,txSize,reference.price,
+        null,null,null,true
+      );
+      const net=simulatedProfit-fees.usdc;
+      const requiredProtected=exactContext.minProfit+fees.usdc*125n/100n;
+      if(net<exactContext.minProfit) throw new Error("O lucro líquido caiu para "+fmtUSDC(net,6)+" USDC. Valide novamente.");
+      if(exactPlan.minProfit<requiredProtected) throw new Error("As taxas aumentaram depois da validação. Valide novamente.");
+      const gasBalance=await provider.getBalance(account,FLASHBLOCK_TAG);
+      const requiredEth=fees.totalWei*150n/100n;
+      if(gasBalance<requiredEth) throw new Error(`Saldo de ETH insuficiente para a margem de gás. Necessário: ${ethers.formatEther(requiredEth)} ETH; disponível: ${ethers.formatEther(gasBalance)} ETH.`);
+      show("executeStatus",`Pré-validação aprovada. Líquido estimado: ${fmtUSDC(net,6)} USDC.\nMargem de gás disponível: ${ethers.formatEther(gasBalance)} ETH.\nConfirme somente rede Base e valor 0 ETH…`,"warn");
+      const tx=await executor.startArbitrage(exactPlan,{gasLimit:gas*120n/100n});
+      show("executeStatus",`Transação enviada:\n${tx.hash}\nAguardando confirmação…`,"warn");
+      const receipt=await tx.wait();
+      show("executeStatus",`FLASH LOAN CONFIRMADO\nHash: ${receipt.hash}\nBloco: ${receipt.blockNumber}\nConfira o saldo do executor antes de sacar.`,"ok");
+      exactPlan=null; exactContext=null; exactValidUntil=0; $("withdrawBtn").disabled=false;
+    } catch(e) { show("executeStatus",errText(e),"bad"); }
+  };
+
+
+  async function setExecutorPaused(newPaused) {
+    if(!executor||!executorBytecodeVerified) throw new Error("Executor V8 verificado é necessário.");
+    const action=newPaused?"pausar":"reativar";
+    if(!confirm(`Confirma ${action} o executor V8?`)) return;
+    $("pauseBtn").disabled=true; $("unpauseBtn").disabled=true;
+    const tx=await executor.setPaused(newPaused);
+    show("executeStatus",`${newPaused?"Pausa":"Reativação"} enviada: ${tx.hash}` ,"warn");
+    await tx.wait();
+    $("pauseBtn").disabled=newPaused;
+    $("unpauseBtn").disabled=!newPaused;
+    $("exactBtn").disabled=newPaused||!(confirmedRoute&&executorBytecodeVerified);
+    $("executeBtn").disabled=true;
+    exactPlan=null; exactContext=null; exactValidUntil=0;
+    show("executeStatus",newPaused?"EXECUTOR PAUSADO. Nenhuma arbitragem pode iniciar.":"EXECUTOR REATIVADO. Faça nova simulação antes de executar.",newPaused?"warn":"ok");
+  }
+
+  $("pauseBtn").onclick=async()=>{try{await setExecutorPaused(true);}catch(e){show("executeStatus",errText(e),"bad");}};
+  $("unpauseBtn").onclick=async()=>{try{await setExecutorPaused(false);}catch(e){show("executeStatus",errText(e),"bad");}};
+
+  $("withdrawBtn").onclick=async()=>{
+    try {
+      if(!executor||!executorBytecodeVerified) throw new Error("Nenhum executor V8 verificado carregado.");
+      const token=new ethers.Contract(NETWORKS.base.usdc,ERC20_ABI,provider);
+      const bal=await token.balanceOf(executorAddress);
+      if(bal===0n) throw new Error("O executor não tem USDC para sacar.");
+      if(!confirm(`Sacar ${fmtUSDC(bal,6)} USDC do executor para sua carteira?`)) return;
+      const tx=await executor.withdrawToken(NETWORKS.base.usdc); show("executeStatus","Saque enviado: "+tx.hash,"warn");
+      await tx.wait(); show("executeStatus","USDC retirado do executor.","ok");
+    } catch(e) { show("executeStatus",errText(e),"bad"); }
+  };
+
+  if(globalThis.__FLASHLOAN_TEST_MODE__) {
+    globalThis.__FLASHLOAN_V8_TESTS__={
+      VENUE,UNI_FEE_TIERS,PANCAKE_FEE_TIERS,SLIP_TICK_SPACINGS,
+      MIN_SCAN_AMOUNT,MAX_SCAN_AMOUNT,DISCOVERY_TEMPLATES,REFINE_BPS,
+      SCAN_BUDGET_MS,QUOTE_ATTEMPT_TIMEOUT_MS,PRIORITY_PHASE_MS,FINAL_REFINE_RESERVE_MS,EXECUTION_RPC_TIMEOUT_MS,FAST_COARSE_AMOUNTS,FAST_DISCOVERY_BUYS,FAST_REFINE_ROUTES,TARGET_QUOTE_CONCURRENCY,
+      DISCOVERY_BLOCK_TAG,REVALIDATION_BLOCK_TAG,FINAL_REVALIDATION_ROUTES,RPC_CIRCUIT_FAILURES,RPC_CIRCUIT_OPEN_MS,
+      venueOptions,fastVenueOptions,optionKey,optionText,routeTemplateKey,priorityTemplatesForTarget,selectDiverseFirstQuotes,buildRefinedAmounts,selectFastAmounts,selectPriorityAmounts,normalizeHistoricalRoute,loadHistoricalPriority,buildPriorityJobs,shouldPruneMarketLoss,withExecutionTimeout,routePlan
+    };
+  }
+
+  window.ethereum?.on?.("chainChanged",()=>location.reload());
+  window.ethereum?.on?.("accountsChanged",()=>location.reload());
+})();
+
+</script>
+</main>
+</body>
+</html>
