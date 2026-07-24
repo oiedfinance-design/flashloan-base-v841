@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111d">
+  <title>Flash Loan Base — V8.4 History Priority + Timeout</title>
+  <style>
+    :root { --bg:#07111d; --panel:#101d2e; --panel2:#0a1524; --text:#f5f8ff;
+      --muted:#aab7ca; --accent:#79a7ff; --ok:#42dda1; --bad:#ff7184;
+      --warn:#ffd275; --border:#30445e; --cyan:#61e4f4; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(#040a12,var(--bg)); color:var(--text);
+      font:16px/1.46 system-ui,-apple-system,sans-serif; }
+    main { max-width:1100px; margin:auto; padding:18px 13px 64px; }
+    h1 { font-size:clamp(28px,7vw,46px); line-height:1.04; margin:11px 0; }
+    h2 { font-size:22px; margin:0 0 10px; }
+    p { color:var(--muted); }
+    code { color:#dce8ff; word-break:break-all; }
+    .badge { display:inline-block; border:1px solid var(--border); border-radius:999px;
+      padding:7px 11px; color:var(--cyan); background:var(--panel2); font-weight:850; font-size:13px; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:21px;
+      padding:17px; margin:15px 0; }
+    .notice { border-left:4px solid var(--warn); padding:12px 14px; background:var(--panel2);
+      border-radius:12px; color:var(--muted); }
+    button { width:100%; border:0; border-radius:15px; padding:16px; margin:8px 0;
+      background:var(--accent); color:#06101d; font-size:17px; font-weight:900; }
+    button.alt { background:#1d304a; color:var(--text); border:1px solid var(--border); }
+    button.danger { background:#5b2631; color:#fff; border:1px solid var(--bad); }
+    button:disabled { opacity:.43; }
+    input { width:100%; border:1px solid var(--border); border-radius:14px; padding:14px;
+      background:var(--panel2); color:var(--text); font-size:18px; margin:6px 0 10px; }
+    label { display:block; color:var(--muted); font-weight:750; margin-top:8px; }
+    .inline-check { display:flex; gap:10px; align-items:flex-start; color:var(--muted); margin:10px 0; }
+    .inline-check input { width:auto; margin:4px 0 0; transform:scale(1.25); }
+    .target-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:8px 0 12px; }
+    .target-grid label { display:flex; gap:8px; align-items:center; background:var(--panel2); border:1px solid var(--border); border-radius:12px; padding:10px; margin:0; }
+    .target-grid input { width:auto; margin:0; }
+    .status { padding:14px; border:1px solid var(--border); background:var(--panel2);
+      border-radius:14px; font-weight:740; word-break:break-word; white-space:pre-wrap; }
+    .ok { color:var(--ok); border-color:var(--ok); }
+    .bad { color:var(--bad); border-color:var(--bad); }
+    .warn { color:var(--warn); border-color:var(--warn); }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }
+    .grid3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:10px; }
+    .metric { background:var(--panel2); border:1px solid var(--border); border-radius:14px; padding:12px; }
+    .metric small { display:block; color:var(--muted); }
+    .metric strong { word-break:break-word; }
+    table { width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; min-width:1180px; }
+    th,td { text-align:left; padding:9px 6px; border-bottom:1px solid var(--border); }
+    th { color:var(--muted); position:sticky; top:0; background:var(--panel); }
+    .positive { color:var(--ok); font-weight:900; }
+    .negative { color:var(--bad); font-weight:900; }
+    .hidden { display:none; }
+    details { margin-top:12px; }
+    summary { cursor:pointer; color:var(--accent); font-weight:800; }
+    .tiny { font-size:13px; color:var(--muted); }
+    .pulse { animation:pulse 1.6s infinite; }
+    @keyframes pulse { 50% { opacity:.55; } }
+    @media(max-width:760px) { .grid,.grid3,.target-grid { grid-template-columns:1fr; } table { font-size:12px; } }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.5/ethers.umd.min.js"
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+<main>
+  <span class="badge">Base • Morpho Blue • 4 DEXs • Flashblocks pending • V8.4 History Priority</span>
+  <h1>Flash Loan Base — History Priority V8.4</h1>
+  <p>A V8.4 pesquisa Uniswap V3, Aerodrome clássico, Aerodrome Slipstream e PancakeSwap V3 no estado pré-confirmado <code>pending</code> da Base. Primeiro revalida a melhor rota salva pela versão anterior, depois testa as prioridades fixas, descobre alternativas e refina os melhores resultados, sempre em até 5 minutos.</p>
+  <div class="notice"><strong>Smart Priority não fabrica lucro.</strong> Cada leitura tem orçamento rígido de 4min45s. A busca começa pelas rotas que as versões anteriores quase levaram ao equilíbrio, evitando gastar todo o prazo em pools improváveis. Verde ainda exige cotação positiva, custos, lucro mínimo e simulação atômica no estado <code>pending</code>.</div>
+
+  <section class="card">
+    <h2>1. Configurar e monitorar</h2>
+    <label for="amounts">Valores do empréstimo em USDC</label>
+    <input id="amounts" value="10,50,250,2500,10000,50000" inputmode="decimal">
+    <label>Ativos-alvo</label>
+    <div class="target-grid">
+      <label><input type="checkbox" data-target="weth" checked>WETH</label>
+      <label><input type="checkbox" data-target="cbeth" checked>cbETH</label>
+      <label><input type="checkbox" data-target="wsteth" checked>wstETH</label>
+      <label><input type="checkbox" data-target="cbbtc" checked>cbBTC</label>
+      <label><input type="checkbox" data-target="aero" checked>AERO</label>
+      <label><input type="checkbox" data-target="usdbc" checked>USDbC</label>
+      <label><input type="checkbox" data-target="eurc" checked>EURC</label>
+    </div>
+    <label for="slippage">Reserva por rota (bps)</label>
+    <input id="slippage" value="1" inputmode="numeric">
+    <label for="minProfit">Lucro líquido mínimo protegido (USDC)</label>
+    <input id="minProfit" value="0.01" inputmode="decimal">
+    <label for="intervalSeconds">Intervalo automático (segundos)</label>
+    <input id="intervalSeconds" value="6" inputmode="numeric">
+    <label class="inline-check"><input id="adaptiveRefine" type="checkbox" checked><span>Refinar automaticamente valores perto dos melhores resultados.</span></label>
+    <label class="inline-check"><input id="divineMode" type="checkbox" checked><span><strong>Smart Priority:</strong> depois da rota histórica automática, testa diferenças de fee tier e as rotas mais promissoras, força diversidade entre DEXs e refina as quatro melhores rotas.</span></label>
+
+    <button id="scanBtn">Escanear agora</button>
+    <button id="startMonitorBtn" class="alt">Iniciar monitor automático</button>
+    <button id="stopMonitorBtn" class="danger" disabled>Parar monitor</button>
+    <button id="exportBtn" class="alt" disabled>Baixar diagnóstico da última leitura</button>
+    <div id="scanStatus" class="status">Pronto. A carteira permanece desconectada.</div>
+
+    <div class="grid3">
+      <div class="metric"><small>Preço de referência ETH</small><strong id="oraclePrice">—</strong></div>
+      <div class="metric"><small>Gás atual</small><strong id="gasPrice">—</strong></div>
+      <div class="metric"><small>Última leitura</small><strong id="lastScan">—</strong></div>
+      <div class="metric"><small>Cotação Aerodrome</small><strong id="aeroLiquidity">—</strong></div>
+      <div class="metric"><small>Cotações Uniswap</small><strong id="uniLiquidity">—</strong></div>
+      <div class="metric"><small>Cotações Slipstream</small><strong id="slipLiquidity">—</strong></div>
+      <div class="metric"><small>Cotações Pancake V3</small><strong id="pancakeLiquidity">—</strong></div>
+      <div class="metric"><small>Flashblocks</small><strong id="flashblocksState">—</strong></div>
+      <div class="metric"><small>RPC ativo</small><strong id="rpcState">—</strong></div>
+      <div class="metric"><small>Próxima leitura</small><strong id="nextScan">—</strong></div>
+      <div class="metric"><small>Etapa</small><strong id="scanPhase">—</strong></div>
+      <div class="metric"><small>Tempo restante desta consulta</small><strong id="scanBudgetState">5:00 máximo</strong></div>
+      <div class="metric"><small>Tela ativa</small><strong id="wakeState">desligada</strong></div>
+      <div class="metric"><small>Execução L2</small><strong id="l2Fee">—</strong></div>
+      <div class="metric"><small>Publicação L1</small><strong id="l1Fee">—</strong></div>
+      <div class="metric"><small>Taxa do operador</small><strong id="operatorFee">—</strong></div>
+      <div class="metric"><small>Premium flash loan</small><strong id="flashPremium">—</strong></div>
+      <div class="metric"><small>Spread bruto</small><strong id="grossSpread">—</strong></div>
+      <div class="metric"><small>Reserva de segurança</small><strong id="safetyReserve">—</strong></div>
+      <div class="metric"><small>Líquido pela cotação atual</small><strong id="marketNet">—</strong></div>
+    </div>
+
+    <div class="grid">
+      <div class="metric"><small>Melhor rota</small><strong id="bestRoute">—</strong></div>
+      <div class="metric"><small>Melhor líquido atual</small><strong id="bestNet">—</strong></div>
+      <div class="metric"><small>Bloco</small><strong id="bestBlock">—</strong></div>
+      <div class="metric"><small>Confirmações</small><strong id="confirmations">0/1</strong></div>
+    </div>
+
+    <div class="hidden"><strong id="baseBest">—</strong><span id="baseState"></span></div>
+
+    <div style="overflow:auto"><table id="resultTable" class="hidden">
+      <thead><tr><th>Valor</th><th>Ativo</th><th>Rota</th><th>Parâmetros</th><th>Spread bruto</th><th>Rede</th><th>Reserva</th><th>Líquido atual</th><th>Pior caso</th></tr></thead>
+      <tbody id="resultBody"></tbody>
+    </table></div>
+    <p class="tiny">O resultado “atual” usa o estado pré-confirmado pending. A V8.4 começa pela melhor rota histórica válida; sem histórico, começa por WETH e por diferenças entre pools da mesma DEX. Usa até 7 templates descobertos por ativo, quatro valores na fase ampla e refino de quatro rotas. Se o prazo terminar, mostra o melhor resultado parcial já calculado. Uma candidata verde ainda precisa passar pela simulação integral e pela proteção on-chain.</p>
+  </section>
+
+  <section class="card">
+    <h2>2. Carteira e executor</h2>
+    <div id="baseGate" class="status">Você pode preparar a carteira antes de surgir uma rota positiva.</div>
+    <label class="inline-check"><input id="riskAck" type="checkbox"><span>Entendo que a Base principal usa ETH real para gás e que uma transação revertida ainda pode consumir gás.</span></label>
+    <button id="connectBtn" disabled>Conectar carteira na Base</button>
+    <div class="grid">
+      <div class="metric"><small>Conta</small><strong id="account">—</strong></div>
+      <div class="metric"><small>Rede</small><strong id="network">—</strong></div>
+      <div class="metric"><small>Saldo de ETH</small><strong id="ethBalance">—</strong></div>
+      <div class="metric"><small>Financiamento</small><strong id="premiumBps">—</strong></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>3. Preparar ou carregar executor</h2>
+    <button id="compileBtn" disabled>Preparar contrato V8</button>
+    <div id="compileStatus" class="status">Conecte a carteira para preparar o contrato.</div>
+    <button id="deployBtn" class="alt" disabled>Implantar executor na Base</button>
+    <label for="executorInput">Executor já implantado</label>
+    <input id="executorInput" placeholder="0x..." autocomplete="off" spellcheck="false">
+    <button id="loadExecutorBtn" class="alt" disabled>Carregar e verificar executor</button>
+    <div id="deployStatus" class="status">Nenhum executor carregado.</div>
+  </section>
+
+  <section class="card">
+    <h2>4. Simular e executar</h2>
+    <button id="exactBtn" class="alt" disabled>Simular flash loan completo</button>
+    <div id="exactStatus" class="status">Aguardando executor verificado e rota positiva.</div>
+    <button id="executeBtn" disabled>Executar flash loan</button>
+    <div id="executeStatus" class="status">Nenhuma transação enviada.</div>
+  </section>
+
+  <section class="card">
+    <h2>5. Segurança e retirada</h2>
+    <button id="pauseBtn" class="danger" disabled>Pausar executor</button>
+    <button id="unpauseBtn" class="alt" disabled>Reativar executor</button>
+    <button id="withdrawBtn" class="danger" disabled>Sacar USDC do executor</button>
+    <p class="tiny">A pausa bloqueia novas arbitragens, mas mantém o saque pelo proprietário.</p>
+  </section>
+
+  <section class="card">
+    <details open><summary>O que mudou na V8.4</summary>
+      <p><strong>History Priority + RPC Timeout:</strong> a melhor rota válida salva pela V8.3 é testada primeiro e deduplicada dos presets. A validação integral agora limita cada chamada RPC a 12 segundos. O scan mantém limite rígido de 285 segundos, fase prioritária de 90 segundos, seleção diversificada por venue e refino das quatro melhores rotas. Verde continua significando lucro líquido estimado, nunca garantia.</p>
+    </details>
+  </section>
+
+<script id="soliditySource" type="text/plain">// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+interface IERC20Minimal {
+    function balanceOf(address account) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+
+interface IMorphoMinimal {
+    function flashLoan(address token, uint256 assets, bytes calldata data) external;
+}
+
+interface IUniswapV3SwapRouter02 {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external payable returns (uint256 amountOut);
+}
+
+interface IPancakeV3SwapRouter {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external payable returns (uint256 amountOut);
+}
+
+interface IAerodromeRouter {
+    struct Route { address from; address to; bool stable; address factory; }
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        Route[] calldata routes,
+        address to,
+        uint256 deadline
+    ) external returns (uint256[] memory amounts);
+}
+
+interface ISlipstreamSwapRouter {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        int24 tickSpacing;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external payable returns (uint256 amountOut);
+}
+
+/**
+ * @title FlashLoanArbitrageBaseV80
+ * @notice Executor USDC para arbitragem atômica na Base usando Morpho Blue e
+ *         Uniswap V3, Aerodrome clássico, Aerodrome Slipstream e PancakeSwap V3.
+ * @dev O contrato nunca mantém dívida: toda operação reverte se não devolver o
+ *      principal e o lucro mínimo protegido. A taxa de rede é paga em ETH pelo
+ *      proprietário e deve ser incorporada ao campo minProfit pelo painel.
+ */
+contract FlashLoanArbitrageBaseV80 {
+    uint256 public constant BASE_CHAIN_ID = 8453;
+    uint256 public constant MAX_LOAN_AMOUNT = 50_000e6;
+    uint256 public constant MIN_PROFIT_FLOOR = 10_000; // 0,01 USDC, perfil agressivo
+
+    uint8 public constant VENUE_UNISWAP = 0;
+    uint8 public constant VENUE_AERODROME = 1;
+    uint8 public constant VENUE_SLIPSTREAM = 2;
+    uint8 public constant VENUE_PANCAKE = 3;
+
+    address public constant MORPHO = 0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb;
+    address public constant USDC = 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913;
+    address public constant WETH = 0x4200000000000000000000000000000000000006;
+    address public constant CBETH = 0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22;
+    address public constant WSTETH = 0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452;
+    address public constant AERO = 0x940181a94a35a4569e4529a3cdfb74e38fd98631;
+    address public constant USDBC = 0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca;
+    address public constant EURC = 0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42;
+    address public constant CBBTC = 0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf;
+
+    address public constant UNISWAP_ROUTER = 0x2626664c2603336e57b271c5c0b26f421741e481;
+    address public constant AERODROME_ROUTER = 0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43;
+    address public constant AERODROME_FACTORY = 0x420dd381b31aef6683db6b902084cb0ffece40da;
+    address public constant SLIPSTREAM_ROUTER = 0xbe6d8f0d05cc4be24d5167a3ef062215be6d18a5;
+    address public constant PANCAKE_ROUTER = 0x1b81d678ffb9c0263b24a97847620c99d213eb14;
+
+    address public owner;
+    address public pendingOwner;
+    bool public paused;
+
+    bool private loanActive;
+    bytes32 private activeRouteHash;
+    uint256 private preLoanBalance;
+
+    struct RoutePlan {
+        uint256 amount;
+        address target;
+        uint8 buyVenue;
+        uint8 sellVenue;
+        uint24 buyV3Fee;
+        uint24 sellV3Fee;
+        int24 buySlipstreamTickSpacing;
+        int24 sellSlipstreamTickSpacing;
+        bool buyAerodromeStable;
+        bool sellAerodromeStable;
+        uint256 minTargetOut;
+        uint256 minUsdcOut;
+        uint256 minProfit;
+        uint256 deadline;
+    }
+
+    event ExecutorDeployed(address indexed executor, address indexed owner);
+    event OwnershipTransferStarted(address indexed owner, address indexed pendingOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event PausedSet(bool paused);
+    event ArbitrageStarted(
+        bytes32 indexed routeHash,
+        address indexed target,
+        uint256 amount,
+        uint8 buyVenue,
+        uint8 sellVenue,
+        uint24 buyV3Fee,
+        uint24 sellV3Fee,
+        int24 buySlipstreamTickSpacing,
+        int24 sellSlipstreamTickSpacing,
+        bool buyAerodromeStable,
+        bool sellAerodromeStable
+    );
+    event ArbitrageSettled(
+        bytes32 indexed routeHash,
+        address indexed target,
+        uint256 amountBorrowed,
+        uint256 premium,
+        uint256 targetReceived,
+        uint256 usdcReturned,
+        uint256 realizedProfit
+    );
+    event TokenWithdrawn(address indexed token, address indexed recipient, uint256 amount);
+
+    error NotOwner();
+    error NotPendingOwner();
+    error ZeroAddress();
+    error ExecutorPaused();
+    error WrongChain();
+    error InvalidRoute();
+    error InvalidAmount();
+    error InvalidFee();
+    error InvalidTickSpacing();
+    error InvalidTarget();
+    error InvalidStableMode();
+    error DeadlineExpired();
+    error LoanAlreadyActive();
+    error NoActiveLoan();
+    error NotMorpho();
+    error RouteHashMismatch();
+    error Unprofitable(uint256 available, uint256 required);
+    error TokenCallFailed(address token);
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    modifier whenNotPaused() {
+        if (paused) revert ExecutorPaused();
+        _;
+    }
+
+    constructor() {
+        if (block.chainid != BASE_CHAIN_ID) revert WrongChain();
+        owner = msg.sender;
+        emit ExecutorDeployed(address(this), msg.sender);
+        emit OwnershipTransferred(address(0), msg.sender);
+    }
+
+    function isSupportedTarget(address target) public pure returns (bool) {
+        return target == WETH || target == CBETH || target == WSTETH ||
+            target == AERO || target == USDBC || target == EURC || target == CBBTC;
+    }
+
+    function startArbitrage(RoutePlan calldata plan)
+        external
+        onlyOwner
+        whenNotPaused
+        returns (uint256 realizedProfit)
+    {
+        if (block.chainid != BASE_CHAIN_ID) revert WrongChain();
+        if (loanActive) revert LoanAlreadyActive();
+        _validatePlan(plan);
+
+        uint256 beforeBalance = IERC20Minimal(USDC).balanceOf(address(this));
+        bytes32 routeHash = keccak256(abi.encode(plan));
+        loanActive = true;
+        activeRouteHash = routeHash;
+        preLoanBalance = beforeBalance;
+
+        emit ArbitrageStarted(
+            routeHash,
+            plan.target,
+            plan.amount,
+            plan.buyVenue,
+            plan.sellVenue,
+            plan.buyV3Fee,
+            plan.sellV3Fee,
+            plan.buySlipstreamTickSpacing,
+            plan.sellSlipstreamTickSpacing,
+            plan.buyAerodromeStable,
+            plan.sellAerodromeStable
+        );
+
+        IMorphoMinimal(MORPHO).flashLoan(USDC, plan.amount, abi.encode(plan));
+        if (loanActive) revert NoActiveLoan();
+
+        uint256 afterBalance = IERC20Minimal(USDC).balanceOf(address(this));
+        realizedProfit = afterBalance - beforeBalance;
+        activeRouteHash = bytes32(0);
+        preLoanBalance = 0;
+    }
+
+    function onMorphoFlashLoan(uint256 assets, bytes calldata data) external {
+        if (msg.sender != MORPHO) revert NotMorpho();
+        if (!loanActive) revert NoActiveLoan();
+
+        RoutePlan memory plan = abi.decode(data, (RoutePlan));
+        if (keccak256(abi.encode(plan)) != activeRouteHash) revert RouteHashMismatch();
+        if (assets != plan.amount) revert InvalidAmount();
+        if (block.timestamp > plan.deadline) revert DeadlineExpired();
+
+        uint256 targetReceived = _swapVenue(
+            true, USDC, plan.target, assets, plan.minTargetOut, plan
+        );
+        uint256 usdcReturned = _swapVenue(
+            false, plan.target, USDC, targetReceived, plan.minUsdcOut, plan
+        );
+
+        uint256 effectiveMinProfit = plan.minProfit < MIN_PROFIT_FLOOR
+            ? MIN_PROFIT_FLOOR
+            : plan.minProfit;
+        uint256 required = preLoanBalance + assets + effectiveMinProfit;
+        uint256 available = IERC20Minimal(USDC).balanceOf(address(this));
+        if (available < required) revert Unprofitable(available, required);
+
+        uint256 profit = available - preLoanBalance - assets;
+        _forceApprove(USDC, MORPHO, assets);
+        loanActive = false;
+
+        emit ArbitrageSettled(
+            activeRouteHash,
+            plan.target,
+            assets,
+            0,
+            targetReceived,
+            usdcReturned,
+            profit
+        );
+    }
+
+    function setPaused(bool newPaused) external onlyOwner {
+        if (loanActive) revert LoanAlreadyActive();
+        paused = newPaused;
+        emit PausedSet(newPaused);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        address previousOwner = owner;
+        owner = msg.sender;
+        pendingOwner = address(0);
+        emit OwnershipTransferred(previousOwner, msg.sender);
+    }
+
+    function withdrawToken(address token) external onlyOwner {
+        if (loanActive) revert LoanAlreadyActive();
+        uint256 balance = IERC20Minimal(token).balanceOf(address(this));
+        if (balance == 0) return;
+        _safeTransfer(token, owner, balance);
+        emit TokenWithdrawn(token, owner, balance);
+    }
+
+    function _validatePlan(RoutePlan calldata plan) internal view {
+        if (plan.amount == 0 || plan.amount > MAX_LOAN_AMOUNT) revert InvalidAmount();
+        if (!isSupportedTarget(plan.target)) revert InvalidTarget();
+
+        _validateLeg(
+            plan.buyVenue,
+            plan.target,
+            plan.buyV3Fee,
+            plan.buySlipstreamTickSpacing,
+            plan.buyAerodromeStable
+        );
+        _validateLeg(
+            plan.sellVenue,
+            plan.target,
+            plan.sellV3Fee,
+            plan.sellSlipstreamTickSpacing,
+            plan.sellAerodromeStable
+        );
+
+        if (plan.buyVenue == plan.sellVenue) {
+            if (
+                plan.buyV3Fee == plan.sellV3Fee &&
+                plan.buySlipstreamTickSpacing == plan.sellSlipstreamTickSpacing &&
+                plan.buyAerodromeStable == plan.sellAerodromeStable
+            ) revert InvalidRoute();
+        }
+
+        if (plan.minTargetOut == 0 || plan.minUsdcOut == 0) revert InvalidRoute();
+        if (plan.deadline <= block.timestamp || plan.deadline > block.timestamp + 2 minutes) {
+            revert DeadlineExpired();
+        }
+    }
+
+    function _validateLeg(
+        uint8 venue,
+        address target,
+        uint24 v3Fee,
+        int24 slipstreamTickSpacing,
+        bool aerodromeStable
+    ) internal pure {
+        if (venue == VENUE_UNISWAP) {
+            if (!_supportedUniswapFee(v3Fee)) revert InvalidFee();
+            if (slipstreamTickSpacing != 0 || aerodromeStable) revert InvalidRoute();
+            return;
+        }
+        if (venue == VENUE_PANCAKE) {
+            if (!_supportedPancakeFee(v3Fee)) revert InvalidFee();
+            if (slipstreamTickSpacing != 0 || aerodromeStable) revert InvalidRoute();
+            return;
+        }
+        if (venue == VENUE_AERODROME) {
+            if (v3Fee != 0 || slipstreamTickSpacing != 0) revert InvalidRoute();
+            if (aerodromeStable && target != USDBC && target != EURC) {
+                revert InvalidStableMode();
+            }
+            return;
+        }
+        if (venue == VENUE_SLIPSTREAM) {
+            if (v3Fee != 0 || slipstreamTickSpacing <= 0 || aerodromeStable) {
+                revert InvalidTickSpacing();
+            }
+            return;
+        }
+        revert InvalidRoute();
+    }
+
+    function _supportedUniswapFee(uint24 fee) internal pure returns (bool) {
+        return fee == 100 || fee == 500 || fee == 3000 || fee == 10000;
+    }
+
+    function _supportedPancakeFee(uint24 fee) internal pure returns (bool) {
+        return fee == 100 || fee == 500 || fee == 2500 || fee == 3000 || fee == 10000;
+    }
+
+    function _swapVenue(
+        bool buySide,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        RoutePlan memory plan
+    ) internal returns (uint256 amountOut) {
+        uint8 venue = buySide ? plan.buyVenue : plan.sellVenue;
+        uint24 v3Fee = buySide ? plan.buyV3Fee : plan.sellV3Fee;
+        int24 slipstreamTickSpacing = buySide
+            ? plan.buySlipstreamTickSpacing
+            : plan.sellSlipstreamTickSpacing;
+        bool aerodromeStable = buySide
+            ? plan.buyAerodromeStable
+            : plan.sellAerodromeStable;
+
+        if (venue == VENUE_UNISWAP) {
+            return _swapUniswap(tokenIn, tokenOut, amountIn, amountOutMin, v3Fee);
+        }
+        if (venue == VENUE_AERODROME) {
+            return _swapAerodrome(
+                tokenIn, tokenOut, amountIn, amountOutMin, plan.deadline, aerodromeStable
+            );
+        }
+        if (venue == VENUE_SLIPSTREAM) {
+            return _swapSlipstream(
+                tokenIn, tokenOut, amountIn, amountOutMin, plan.deadline, slipstreamTickSpacing
+            );
+        }
+        if (venue == VENUE_PANCAKE) {
+            return _swapPancake(
+                tokenIn, tokenOut, amountIn, amountOutMin, plan.deadline, v3Fee
+            );
+        }
+        revert InvalidRoute();
+    }
+
+    function _swapUniswap(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        uint24 fee
+    ) internal returns (uint256 amountOut) {
+        _forceApprove(tokenIn, UNISWAP_ROUTER, amountIn);
+        amountOut = IUniswapV3SwapRouter02(UNISWAP_ROUTER).exactInputSingle(
+            IUniswapV3SwapRouter02.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: fee,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMin,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    function _swapPancake(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        uint256 deadline,
+        uint24 fee
+    ) internal returns (uint256 amountOut) {
+        _forceApprove(tokenIn, PANCAKE_ROUTER, amountIn);
+        amountOut = IPancakeV3SwapRouter(PANCAKE_ROUTER).exactInputSingle(
+            IPancakeV3SwapRouter.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: fee,
+                recipient: address(this),
+                deadline: deadline,
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMin,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    function _swapAerodrome(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        uint256 deadline,
+        bool stable
+    ) internal returns (uint256 amountOut) {
+        _forceApprove(tokenIn, AERODROME_ROUTER, amountIn);
+        IAerodromeRouter.Route[] memory routes = new IAerodromeRouter.Route[](1);
+        routes[0] = IAerodromeRouter.Route({
+            from: tokenIn,
+            to: tokenOut,
+            stable: stable,
+            factory: AERODROME_FACTORY
+        });
+        uint256[] memory amounts = IAerodromeRouter(AERODROME_ROUTER).swapExactTokensForTokens(
+            amountIn,
+            amountOutMin,
+            routes,
+            address(this),
+            deadline
+        );
+        amountOut = amounts[amounts.length - 1];
+    }
+
+    function _swapSlipstream(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMin,
+        uint256 deadline,
+        int24 tickSpacing
+    ) internal returns (uint256 amountOut) {
+        _forceApprove(tokenIn, SLIPSTREAM_ROUTER, amountIn);
+        amountOut = ISlipstreamSwapRouter(SLIPSTREAM_ROUTER).exactInputSingle(
+            ISlipstreamSwapRouter.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                tickSpacing: tickSpacing,
+                recipient: address(this),
+                deadline: deadline,
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMin,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    function _forceApprove(address token, address spender, uint256 amount) internal {
+        (bool ok, bytes memory data) = token.call(
+            abi.encodeCall(IERC20Minimal.approve, (spender, amount))
+        );
+        if (ok && (data.length == 0 || abi.decode(data, (bool)))) return;
+
+        (ok, data) = token.call(abi.encodeCall(IERC20Minimal.approve, (spender, 0)));
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {
+            revert TokenCallFailed(token);
+        }
+
+        (ok, data) = token.call(
+            abi.encodeCall(IERC20Minimal.approve, (spender, amount))
+        );
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {
+            revert TokenCallFailed(token);
+        }
+    }
+
+    function _safeTransfer(address token, address to, uint256 amount) internal {
+        (bool ok, bytes memory data) = token.call(
+            abi.encodeCall(IERC20Minimal.transfer, (to, amount))
+        );
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {
+            revert TokenCallFailed(token);
+        }
+    }
+}</script>
+<script src="app.js?v=8.4-history-timeout"></script>
+</main>
+</body>
+</html>
